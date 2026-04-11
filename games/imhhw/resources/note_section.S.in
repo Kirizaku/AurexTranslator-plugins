@@ -1,0 +1,17 @@
+.section .note.at.metadata, "a", @note
+.align 4
+
+.long 17
+.long note_data_end - note_data_start
+.long 0x1000
+
+note_name:
+    .ascii "aurex-translator"
+    .byte 0
+    .byte 0, 0, 0
+
+.align 4
+note_data_start:
+    .incbin "@CONFIG_JSON_PATH@"
+note_data_end:
+.align 4

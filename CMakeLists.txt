@@ -1,0 +1,30 @@
+﻿cmake_minimum_required(VERSION 3.10)
+project(aurextranslator-plugins)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+set(PLUGINS_OUTPUT_DIR ${CMAKE_SOURCE_DIR}/plugins CACHE PATH "Output directory for plugins")
+set(PLUGINS_BIN_DIR ${PLUGINS_OUTPUT_DIR}/bin)
+
+option(BUILD_EXAMPLE_PLUGIN "Build the example plugin" OFF)
+
+if(WIN32)
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(CURRENT_ARCH "x64")
+        add_subdirectory(injector/lib)
+    else()
+        set(CURRENT_ARCH "x86")
+        add_subdirectory(games/imhhw)
+    endif()
+    add_subdirectory(injector/bin)
+else()
+    add_subdirectory(injector/lib)
+    add_subdirectory(injector/bin)
+    add_subdirectory(games/imhhw)
+endif()
+
+if(BUILD_EXAMPLE_PLUGIN)
+    option(BUILD_32_BIT "Compile as 32‑bit (GCC/Clang)" OFF)
+    add_subdirectory(example)
+endif()

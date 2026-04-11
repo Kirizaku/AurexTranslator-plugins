@@ -1,0 +1,11 @@
+{
+    "name": "at-injector",
+    "version": "1.0.0",
+    "dependencies": [],
+    "description": "CLI tool for injecting/unloading libraries into target processes",
+    "type": "hook",
+    "target": {
+        "title": "main-program",
+        "executable": ""
+    }
+}
