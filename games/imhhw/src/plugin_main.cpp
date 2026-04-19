@@ -75,8 +75,6 @@ std::string utf16le_to_utf8(const char16_t* utf16, size_t length) {
     return result;
 }
 
-FILE* log_file = NULL;
-
 std::string parse_strings_from_memory(uint32_t addr) {
     std::string result;
     if (addr == 0) return result;
