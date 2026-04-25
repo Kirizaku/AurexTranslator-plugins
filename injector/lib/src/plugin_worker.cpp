@@ -120,7 +120,7 @@ void PluginWorker::onProcessFound(m_pid_t pid, std::unique_ptr<SharedMemory>& sh
 
     const QString libPath = m_archPaths.value(archStr);
     if (libPath.isEmpty()) {
-        emit workerMessage(tr("[Hook] No %1 library found for plugin: %2").arg(archStr, m_pluginName));
+        emit workerMessage(tr("[Hook] No library found for %1").arg(m_pluginName));
         stop();
         return;
     }
@@ -161,7 +161,7 @@ void PluginWorker::onProcessFound(m_pid_t pid, std::unique_ptr<SharedMemory>& sh
 
         if (lastPid != pid) {
             m_pid = lastPid;
-            emit workerMessage(tr("[Hook] Process stable (PID: %1).").arg(m_pid));
+            emit workerMessage(tr("[Hook] Process stable (PID: %1)").arg(m_pid));
         }
 
         m_waitingConfirmation = true;
@@ -173,7 +173,7 @@ void PluginWorker::onProcessFound(m_pid_t pid, std::unique_ptr<SharedMemory>& sh
         m_confirmMutex.unlock();
 
         if (!m_confirmed) {
-            emit workerMessage(tr("[Hook] Injection cancelled by user."));
+            emit workerMessage(tr("[Hook] Injection cancelled by user"));
             stop();
             return;
         }
@@ -208,7 +208,7 @@ void PluginWorker::handleSharedMemoryMessages(std::unique_ptr<SharedMemory>& shm
             emit workerMessage(tr("[Hook] Injection succeeded (PID: %1). Awaiting text from game...").arg(m_pid));
             break;
         case StatusCode::Failure:
-            emit workerMessage(tr("[Hook] Error (PID: %1): %2.").arg(m_pid).arg(QString::fromStdString(msg->text)));
+            emit workerMessage(tr("[Hook] Error (PID: %1): %2").arg(m_pid).arg(QString::fromStdString(msg->text)));
             stop();
             break;
         }
@@ -217,7 +217,7 @@ void PluginWorker::handleSharedMemoryMessages(std::unique_ptr<SharedMemory>& shm
         emit currentOutput("Hook", QString::fromStdString(msg->text));
         break;
     case MsgType::Info:
-        emit workerMessage(tr("[Hook] %1").arg(QString::fromStdString(msg->text)));
+        emit workerMessage(QString("[Hook] %1").arg(QString::fromStdString(msg->text)));
         break;
     }
 }
