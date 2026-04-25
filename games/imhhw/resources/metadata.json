@@ -1,9 +1,10 @@
 {
     "name": "libat-imhhw",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "dependencies": ["libat-injector"],
     "description": "Hook library for IMHHW (If My Heart Had Wings) game",
     "type": "hook",
+    "category": "game",
     "target": {
         "title": "If My Heart Had Wings",
         "executable": "AdvHD.exe"
