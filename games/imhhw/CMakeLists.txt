@@ -53,6 +53,8 @@ target_include_directories(libat-imhhw PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+target_compile_definitions(libat-imhhw PRIVATE DISABLE_GET_PATCH_LENGTH)
+
 set_target_properties(libat-imhhw PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${PLUGINS_OUTPUT_DIR}
     RUNTIME_OUTPUT_DIRECTORY ${PLUGINS_OUTPUT_DIR}
