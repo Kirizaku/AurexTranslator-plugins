@@ -12,6 +12,8 @@ set(COMMON_SOURCES
     src/license.h
 )
 
+# Linux
+
 function(add_linux_executable BITNESS)
     set(TARGET_NAME "at-injector_${BITNESS}")
 
@@ -49,6 +51,8 @@ function(add_linux_executable BITNESS)
     )
 endfunction()
 
+# Windows
+
 function(add_windows_executable)
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
         set(CURRENT_ARCH "x64")
@@ -82,6 +86,8 @@ function(add_windows_executable)
         COMMENT "Creating bin directory"
     )
 endfunction()
+
+# Instantiate
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_linux_executable(32)
