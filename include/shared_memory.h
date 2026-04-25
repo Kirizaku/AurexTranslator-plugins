@@ -3,7 +3,8 @@
 
 #include <cstring>
 #include <string>
-#include <cstdio>
+#include <cstdint>
+#include <optional>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -14,9 +15,22 @@
 #include <unistd.h>
 #endif
 
+enum class MsgType : uint8_t {
+    Status  = 0,
+    Text    = 1,
+    Info    = 2,
+};
+
+enum class StatusCode : uint8_t {
+    Success = 0,
+    Failure = 1,
+};
+
 struct SharedData {
     int ready;
     char message[1024];
+    MsgType msg_type;
+    StatusCode status_code;
 };
 
 class SharedMemory {
@@ -131,21 +145,32 @@ public:
         return is_valid && data != nullptr;
     }
 
-    bool send(const std::string& msg) {
+    bool send(MsgType type, const std::string& msg, StatusCode code = StatusCode::Success) {
         if (!valid()) return false;
 
-        std::strncpy(data->message, msg.c_str(), sizeof(data->message) - 1);
+        data->msg_type = type;
+        data->status_code = code;
+        std::strncpy(data->message, msg.c_str(), sizeof(data->message) - 1); 
         data->message[sizeof(data->message) - 1] = '\0';
         data->ready = 1;
         return true;
     }
 
-    std::string receive() {
-        if (!valid()) return "";
+    struct Message {
+        MsgType type;
+        StatusCode status_code;
+        std::string text;
+    };
 
-        if (data->ready != 1) return "";
+    std::optional<Message> receive() {
+        if (!valid()) return std::nullopt;
+        if (data->ready != 1) return std::nullopt;
 
-        std::string msg(reinterpret_cast<char*>(data->message));
+        Message msg;
+        msg.type = data->msg_type;
+        msg.status_code = data->status_code;
+        msg.text = std::string(data->message);
+
         data->ready = 0;
         return msg;
     }

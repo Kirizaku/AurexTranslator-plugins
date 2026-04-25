@@ -114,13 +114,27 @@ void PluginWorker::handleSharedMemoryMessages(std::unique_ptr<SharedMemory>& shm
 {
     if (!shm) return;
 
-    std::string msg = shm->receive();
-    if (msg.empty()) return;
+    auto msg = shm->receive();
+    if (!msg) return;
 
-    if (msg == "success") {
-        emit workerMessage(tr("[Hook] Injection succeeded (PID: %1). Awaiting text from game...").arg(m_pid));
-    } else {
-        emit currentOutput("Hook", QString::fromStdString(msg));
+    switch (msg->type) {
+    case MsgType::Status:
+        switch (msg->status_code) {
+        case StatusCode::Success:
+            emit workerMessage(tr("[Hook] Injection succeeded (PID: %1). Awaiting text from game...").arg(m_pid));
+            break;
+        case StatusCode::Failure:
+            emit workerMessage(tr("[Hook] Error (PID: %1): %2.").arg(m_pid).arg(QString::fromStdString(msg->text)));
+            stop();
+            break;
+        }
+        break;
+    case MsgType::Text:
+        emit currentOutput("Hook", QString::fromStdString(msg->text));
+        break;
+    case MsgType::Info:
+        emit workerMessage(tr("[Hook] %1").arg(QString::fromStdString(msg->text)));
+        break;
     }
 }
 

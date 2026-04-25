@@ -39,7 +39,7 @@ static fwrite_func_t original_fwrite_trampoline = nullptr;
 extern "C" size_t my_fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
     if (stream == stdout) {
         std::string msg(static_cast<const char*>(ptr), size * nmemb);
-        shm->send(msg);
+        shm->send(MsgType::Text, msg);
     }
     return original_fwrite_trampoline(ptr, size, nmemb, stream);
 }
@@ -61,11 +61,7 @@ static void cleanup() {
 
 // Init
 static void init() {
-#if defined(_WIN32)
-    const std::string SHM_NAME = "AurexTranslator_test_target.exe";
-#else
-    const std::string SHM_NAME = "AurexTranslator_test_target";
-#endif
+    const std::string SHM_NAME = "AurexTranslator_libat-example";
     const size_t SHM_SIZE = sizeof(SharedData);
 
     shm = new SharedMemory(SHM_NAME, SHM_SIZE, true);
@@ -88,6 +84,11 @@ static void init() {
         }
     }
 #endif
+    if (!original_fwrite_addr) {
+        shm->send(MsgType::Status, "fwrite not found", StatusCode::Failure);
+        return;
+    }
+
     constexpr std::size_t MIN_HOOK_SIZE = (sizeof(void*) == 8) ? 12U : 5U;
 
     hook_size = get_patch_length(original_fwrite_addr, MIN_HOOK_SIZE);
@@ -95,7 +96,7 @@ static void init() {
     std::memcpy(original_code, original_fwrite_addr, hook_size);
     install_hook(reinterpret_cast<uintptr_t>(original_fwrite_addr), reinterpret_cast<void*>(my_fwrite), hook_size);
 
-    shm->send("success");
+    shm->send(MsgType::Status, "", StatusCode::Success);
 }
 
 #if defined(_WIN32)

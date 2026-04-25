@@ -25,12 +25,11 @@ SOFTWARE.
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include <cstddef>
-#include <cstdint>
+#include "shared_memory.h"
 
-#ifndef PAGE_SIZE
-#define PAGE_SIZE 4096
-#endif
+// shared memory
+constexpr const char*  SHM_NAME = "AurexTranslator_libat-imhhw";
+constexpr size_t       SHM_SIZE = sizeof(SharedData);
 
 constexpr uintptr_t FIRST_ADDR  = 0x004b2ca5;
 constexpr uintptr_t SECOND_ADDR = 0x0040792B;

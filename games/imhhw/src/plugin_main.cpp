@@ -23,7 +23,6 @@ SOFTWARE.
 */
 
 #include "memory_utils.h"
-#include "shared_memory.h"
 #include "config.h"
 
 #include <atomic>
@@ -111,7 +110,7 @@ extern "C" {
     void hook_call_third() {
         if (!shm) return;
         std::string parse = parse_strings_from_memory(g_saved_ecx);
-        shm->send(parse);
+        shm->send(MsgType::Text, parse);
         g_state = State::WAITING_FIRST;
     }
 }
@@ -256,9 +255,6 @@ static uint8_t orig_third[THIRD_SIZE];
 
 // Init
 static void init() {
-    const std::string SHM_NAME = "AurexTranslator_AdvHD.exe";
-    const size_t SHM_SIZE = sizeof(SharedData);
-
     shm = new SharedMemory(SHM_NAME, SHM_SIZE, true);
 
     std::memcpy(orig_first,  reinterpret_cast<void*>(FIRST_ADDR),  FIRST_SIZE);
@@ -269,7 +265,7 @@ static void init() {
     install_hook(SECOND_ADDR, reinterpret_cast<void*>(hook_second), SECOND_SIZE);
     install_hook(THIRD_ADDR,  reinterpret_cast<void*>(hook_third),  THIRD_SIZE);
 
-    shm->send("success");
+    shm->send(MsgType::Status, "", StatusCode::Success);
 }
 
 // Cleanup
