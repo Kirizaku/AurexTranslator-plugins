@@ -20,6 +20,7 @@
 
 #include <QThread>
 #include <QStandardPaths>
+#include <QFileInfo>
 
 #ifdef Q_OS_LINUX
 #include <fstream>
@@ -44,7 +45,14 @@ PluginWorker::PluginWorker(const QStringList &args, QObject *parent)
     : QObject(parent)
 {
     m_processName = args.at(0);
-    m_libraryPath = args.at(1);
+    m_pluginName = args.at(1);
+
+    const QStringList entries = args.at(2).split(";", Qt::SkipEmptyParts);
+    for (const QString& entry : entries) {
+        const int sep = entry.indexOf(':');
+        if (sep == -1) continue;
+        m_archPaths[entry.left(sep)] = entry.mid(sep + 1);
+    }
 }
 
 void PluginWorker::stop()
@@ -54,7 +62,7 @@ void PluginWorker::stop()
 
 void PluginWorker::run()
 {
-    const std::string SHM_NAME = "AurexTranslator_" + m_processName.toStdString();
+    const std::string SHM_NAME = "AurexTranslator_" + m_pluginName.toStdString();
     const size_t SHM_SIZE = sizeof(SharedData);
 
     m_processFound = false;
@@ -75,6 +83,15 @@ void PluginWorker::run()
     cleanupAndUnload();
 }
 
+void PluginWorker::onConfirmationResult(bool confirmed)
+{
+    m_confirmMutex.lock();
+    m_confirmed = confirmed;
+    m_waitingConfirmation = false;
+    m_confirmCondition.wakeAll();
+    m_confirmMutex.unlock();
+}
+
 void PluginWorker::handleProcessState(m_pid_t pid, std::unique_ptr<SharedMemory>& shm, const std::string& shmName, size_t shmSize)
 {
     if (pid > 0 && (!m_processFound || pid != m_pid)) {
@@ -90,12 +107,79 @@ void PluginWorker::onProcessFound(m_pid_t pid, std::unique_ptr<SharedMemory>& sh
     m_processFound = true;
     m_pid = pid;
 
-    uintptr_t module = get_module(pid, m_libraryPath);
+    m_processArch = get_process_arch(pid);
+    if (m_processArch == arch::Unknown) {
+        emit workerMessage(tr("[Hook] Unknown architecture for process: %1").arg(m_processName));
+        stop();
+        return;
+    }
+
+    const QString archStr = (m_processArch == arch::X86)
+                                ? QStringLiteral("x86")
+                                : QStringLiteral("x64");
+
+    const QString libPath = m_archPaths.value(archStr);
+    if (libPath.isEmpty()) {
+        emit workerMessage(tr("[Hook] No %1 library found for plugin: %2").arg(archStr, m_pluginName));
+        stop();
+        return;
+    }
+    const QString libFileName = QFileInfo(libPath).fileName();
+    uintptr_t module = get_module(pid, libFileName);
 
     if (module == 0) {
         emit workerMessage(tr("[Hook] Process \"%1\" found (PID: %2). Injecting...").arg(m_processName).arg(pid));
-        QThread::msleep(1500);
-        startInjectorProcess("load", pid, m_libraryPath);
+
+        constexpr int STABLE_CHECKS = 10;
+        constexpr int CHECK_INTERVAL = 50;
+        int stableCount = 0;
+        m_pid_t lastPid = pid;
+
+        while (m_running && stableCount < STABLE_CHECKS) {
+            QThread::msleep(CHECK_INTERVAL);
+            const m_pid_t currentPid = get_pid(m_processName);
+
+            if (currentPid <= 0) {
+                emit workerMessage(tr("[Hook] Process disappeared, waiting..."));
+                stableCount = 0;
+                lastPid = 0;
+                continue;
+            }
+
+            if (currentPid != lastPid) {
+                emit workerMessage(tr("[Hook] Process restarted (PID: %1 → %2), waiting...")
+                    .arg(lastPid).arg(currentPid));
+                lastPid = currentPid;
+                stableCount = 0;
+                continue;
+            }
+
+            ++stableCount;
+        }
+
+        if (!m_running) return;
+
+        if (lastPid != pid) {
+            m_pid = lastPid;
+            emit workerMessage(tr("[Hook] Process stable (PID: %1).").arg(m_pid));
+        }
+
+        m_waitingConfirmation = true;
+        m_confirmed = false;
+        emit confirmationRequired(tr("Inject into \"%1\" (PID: %2)?").arg(m_processName).arg(m_pid));
+
+        m_confirmMutex.lock();
+        m_confirmCondition.wait(&m_confirmMutex);
+        m_confirmMutex.unlock();
+
+        if (!m_confirmed) {
+            emit workerMessage(tr("[Hook] Injection cancelled by user."));
+            stop();
+            return;
+        }
+
+        QThread::msleep(1000);
+        startInjectorProcess("load", m_pid, libPath, m_processArch);
     } else {
         emit workerMessage(tr("[Hook] Injection skipped: library already loaded. Awaiting text from game..."));
     }
@@ -141,7 +225,7 @@ void PluginWorker::handleSharedMemoryMessages(std::unique_ptr<SharedMemory>& shm
 void PluginWorker::cleanupAndUnload()
 {
     if (m_pid > 0 && m_libraryHandle) {
-        startInjectorProcess("unload", m_pid, QString());
+        startInjectorProcess("unload", m_pid, QString(), m_processArch);
     }
 }
 
@@ -306,29 +390,18 @@ bool PluginWorker::hasCapability(cap_value_t cap, const QString &programPath)
 }
 #endif
 
-void PluginWorker::startInjectorProcess(const QString &command, const m_pid_t &pid, const QString &libPath)
+void PluginWorker::startInjectorProcess(const QString &command, const m_pid_t &pid, const QString &libPath, arch processArch)
 {
-    arch current_arch = get_process_arch(pid);
-    QString archSuffix;
-    switch (current_arch) {
-    case arch::X86:
-        archSuffix = QStringLiteral("_x86");
-        break;
-    case arch::X64:
-        archSuffix = QStringLiteral("_x64");
-        break;
-    default:
-        emit workerMessage(tr("[Hook] Unknown architecture for process: %1").arg(m_processName));
-        stop();
-        return;
-    }
+    const QString archSuffix = (processArch == arch::X86)
+    ? QStringLiteral("_x86")
+    : QStringLiteral("_x64");
 
     QString programPath = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
                           + QStringLiteral("/plugins/bin/at-injector")
                           + archSuffix;
 
     QProcess *process = new QProcess();
-    QObject::connect(process, &QProcess::finished, [=](int exitCode, QProcess::ExitStatus status) {
+    QObject::connect(process, &QProcess::finished, this, [=](int exitCode, QProcess::ExitStatus status) {
         if (exitCode == 0 && status == QProcess::NormalExit) {
             if (command == "load") {
                 emit workerMessage(tr("[Hook] Waiting for plugin response..."));
@@ -336,7 +409,7 @@ void PluginWorker::startInjectorProcess(const QString &command, const m_pid_t &p
             }
         } else {
             QString errMsg = QString("[Hook] Command \"%1\" failed (code %2, %3)")
-            .arg(command)
+                .arg(command)
                 .arg(exitCode)
                 .arg(status == QProcess::CrashExit ? QString("crashed")
                                                    : QString("normal exit"));

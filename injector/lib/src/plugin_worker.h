@@ -20,6 +20,9 @@
 
 #include <QObject>
 #include <QProcess>
+#include <QMap>
+#include <QMutex>
+#include <QWaitCondition>
 
 #include "shared_memory.h"
 
@@ -45,9 +48,11 @@ public:
 signals:
     void workerMessage(const QString &msg);
     void currentOutput(const QString &source, const QString &out);
+    void confirmationRequired(const QString& message);
 
 public slots:
     void run();
+    void onConfirmationResult(bool confirmed);
 
 private:
     void handleProcessState(m_pid_t pid, std::unique_ptr<SharedMemory>& shm, const std::string& shmName, size_t shmSize);
@@ -70,15 +75,22 @@ private:
 #ifdef Q_OS_LINUX
     bool hasCapability(cap_value_t cap, const QString &programPath);
 #endif
-    void startInjectorProcess(const QString &command, const m_pid_t &pid, const QString &libPath);
+    void startInjectorProcess(const QString &command, const m_pid_t &pid, const QString &libPath, arch processArch);
     void parseLibraryHandle(QProcess* process);
 
     m_pid_t m_pid = 0;
     QString m_processName;
-    QString m_libraryPath;
+    QString m_pluginName;
+    QMap<QString, QString> m_archPaths;
+    arch m_processArch = arch::Unknown;
     void* m_libraryHandle = nullptr;
     bool m_running = true;
     bool m_processFound = false;
+
+    bool m_confirmed = false;
+    bool m_waitingConfirmation = false;
+    QMutex m_confirmMutex;
+    QWaitCondition m_confirmCondition;
 };
 
 #endif // PLUGIN_WORKER_H

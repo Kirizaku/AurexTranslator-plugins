@@ -8,7 +8,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core LinguistTools)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets LinguistTools)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_library(LIBCAP_STATIC_PATH NAMES libcap.a cap REQUIRED)
@@ -28,7 +28,7 @@ target_include_directories(libat-injector PRIVATE
     ${LIBCAP_INCLUDE_DIRS}
 )
 
-target_link_libraries(libat-injector PRIVATE Qt6::Core ${LIBCAP_STATIC_PATH})
+target_link_libraries(libat-injector PRIVATE Qt6::Core Qt6::Widgets ${LIBCAP_STATIC_PATH})
 
 qt_add_translations(libat-injector
     TS_FILES

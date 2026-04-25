@@ -17,6 +17,8 @@
 
 #include "plugin_main.h"
 #include <QCoreApplication>
+#include <QApplication>
+#include <QMessageBox>
 
 At_injector::At_injector() : m_translator(new QTranslator(this)) {}
 
@@ -41,7 +43,23 @@ QString At_injector::execute(const QString &command, const QStringList &args)
 
         connect(m_worker, &PluginWorker::workerMessage, this, &PluginInterface::pluginMessage);
         connect(m_worker, &PluginWorker::currentOutput, this, &PluginInterface::currentOutput);
+        connect(m_worker, &PluginWorker::confirmationRequired, this, [=](const QString& message) {
+            QMessageBox msgBox(nullptr);
+            msgBox.setWindowTitle(tr("Injection confirmation"));
+            msgBox.setText(message);
+            msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+            msgBox.setWindowFlags(msgBox.windowFlags()
+                | Qt::WindowStaysOnTopHint
+                | Qt::Dialog);
+            msgBox.raise();
+            msgBox.activateWindow();
+
+            const bool confirmed = msgBox.exec() == QMessageBox::Yes;
+            m_worker->onConfirmationResult(confirmed);
+            }, Qt::QueuedConnection);
+
         connect(m_thread, &QThread::started, m_worker, &PluginWorker::run);
+
         m_thread->start();
 
         return QString();

@@ -39,9 +39,9 @@ public:
 
 private:
     PluginWorker *m_worker = nullptr;
-    QThread *m_thread;
+    QThread *m_thread = nullptr;
 
-    QTranslator *m_translator;
+    QTranslator *m_translator = nullptr;
     QString m_currentLanguage;
 
     void cleanupWorker();
