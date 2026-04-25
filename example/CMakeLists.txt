@@ -9,11 +9,19 @@ set(EXAMPLE_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/output")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     if(BUILD_32_BIT)
+        set(IS_32_BIT ON)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -m32")
         set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -m32")
     else()
+        set(IS_32_BIT OFF)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -m64")
         set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -m64")
+    endif()
+elseif(WIN32)
+    if (CMAKE_SIZEOF_VOID_P EQUAL 4)
+        set(IS_32_BIT ON)
+    else()
+        set(IS_32_BIT OFF)
     endif()
 endif()
 
@@ -53,11 +61,26 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set(RC_FILE ${CMAKE_CURRENT_BINARY_DIR}/resources/windows.rc)
 endif()
 
+if (IS_32_BIT)
+    set(HDE_SRC
+        ${COMMON_INCLUDE_DIR}/hde/hde32.cpp
+        ${COMMON_INCLUDE_DIR}/hde/hde32.h
+        ${COMMON_INCLUDE_DIR}/hde/table32.h
+    )
+else()
+    set(HDE_SRC
+        ${COMMON_INCLUDE_DIR}/hde/hde64.cpp
+        ${COMMON_INCLUDE_DIR}/hde/hde64.h
+        ${COMMON_INCLUDE_DIR}/hde/table64.h
+    )
+endif()
+
 # Test plugin
 add_library(libat_example SHARED
     src/plugin_main.cpp
     ${COMMON_INCLUDE_DIR}/memory_utils.cpp ${COMMON_INCLUDE_DIR}/memory_utils.h
     ${COMMON_INCLUDE_DIR}/shared_memory.h
+    ${HDE_SRC}
 )
 
 target_include_directories(libat_example PRIVATE
@@ -87,6 +110,7 @@ set_target_properties(libat_example PROPERTIES
 # Test target
 add_executable(test_target
     src/test_target.cpp
+    resources/metadata.json
 )
 
 set_target_properties(test_target PROPERTIES

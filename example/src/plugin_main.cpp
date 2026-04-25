@@ -44,80 +44,13 @@ extern "C" size_t my_fwrite(const void* ptr, size_t size, size_t nmemb, FILE* st
     return original_fwrite_trampoline(ptr, size, nmemb, stream);
 }
 
-static void* make_trampoline(void* orig, size_t original_len)
-{
-#if defined(__x86_64__) || defined(_M_X64)
-#if defined(_WIN32)
-    const size_t tramp_len = original_len + 15;
-#else
-    const size_t tramp_len = original_len + 12;
-#endif
-    void* tramp = nullptr;
-
-#if defined(_WIN32)
-    tramp = VirtualAlloc(nullptr,
-        tramp_len,
-        MEM_COMMIT | MEM_RESERVE,
-        PAGE_EXECUTE_READWRITE);
-    if (!tramp) return nullptr;
-#else
-    tramp = mmap(nullptr,
-        tramp_len,
-        PROT_READ | PROT_WRITE | PROT_EXEC,
-        MAP_PRIVATE | MAP_ANONYMOUS,
-        -1, 0);
-    if (tramp == MAP_FAILED) return nullptr;
-#endif
-
-    memcpy(tramp, orig, original_len);
-
-    unsigned char jmp_abs[] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };
-    memcpy(static_cast<char*>(tramp) + original_len, jmp_abs, sizeof(jmp_abs));
-
-    uint64_t target = reinterpret_cast<uint64_t>(orig) + original_len;
-    memcpy(static_cast<char*>(tramp) + original_len + sizeof(jmp_abs), &target, sizeof(target));
-
-    return tramp;
-#else
-    const size_t tramp_len = original_len + 5;
-    void* tramp = nullptr;
-
-#if defined(_WIN32)
-    tramp = VirtualAlloc(nullptr,
-        tramp_len,
-        MEM_COMMIT | MEM_RESERVE,
-        PAGE_EXECUTE_READWRITE);
-    if (!tramp) return nullptr;
-#else
-    tramp = mmap(nullptr,
-        tramp_len,
-        PROT_READ | PROT_WRITE | PROT_EXEC,
-        MAP_PRIVATE | MAP_ANONYMOUS,
-        -1, 0);
-    if (tramp == MAP_FAILED) return nullptr;
-#endif
-
-    memcpy(tramp, orig, original_len);
-
-    uint8_t* p = static_cast<uint8_t*>(tramp) + original_len;
-    p[0] = 0xE9;
-    uint32_t rel = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(orig) + original_len - (reinterpret_cast<uintptr_t>(p) + 5));
-    *reinterpret_cast<uint32_t*>(p + 1) = rel;
-
-    return tramp;
-#endif
-}
-
-#if defined(_WIN32)
-constexpr std::size_t HOOK_SIZE = (sizeof(void*) == 8) ? 15U : 5U;
-#else
-constexpr std::size_t HOOK_SIZE = (sizeof(void*) == 8) ? 12U : 5U;
-#endif
-static uint8_t original_code[HOOK_SIZE];
+static uint8_t original_code[64];
+static size_t hook_size = 0;
 
 // Cleanup
 static void cleanup() {
-    restore_hook(reinterpret_cast<uintptr_t>(original_fwrite_addr), original_code, HOOK_SIZE);
+    if (original_fwrite_addr)
+        restore_hook(reinterpret_cast<uintptr_t>(original_fwrite_addr), original_code, hook_size);
 
     shm->cleanup();
 #if defined(__linux__)
@@ -155,14 +88,12 @@ static void init() {
         }
     }
 #endif
-    if (!original_fwrite_addr) {
-        cleanup();
-        return;
-    }
+    constexpr std::size_t MIN_HOOK_SIZE = (sizeof(void*) == 8) ? 12U : 5U;
 
-    original_fwrite_trampoline = reinterpret_cast<fwrite_func_t>(make_trampoline(original_fwrite_addr, HOOK_SIZE));
-    std::memcpy(original_code, original_fwrite_addr, HOOK_SIZE);
-    install_hook(reinterpret_cast<uintptr_t>(original_fwrite_addr), reinterpret_cast<void*>(my_fwrite), HOOK_SIZE);
+    hook_size = get_patch_length(original_fwrite_addr, MIN_HOOK_SIZE);
+    original_fwrite_trampoline = reinterpret_cast<fwrite_func_t>(create_trampoline_with_prolog(reinterpret_cast<uintptr_t>(original_fwrite_addr), hook_size));
+    std::memcpy(original_code, original_fwrite_addr, hook_size);
+    install_hook(reinterpret_cast<uintptr_t>(original_fwrite_addr), reinterpret_cast<void*>(my_fwrite), hook_size);
 
     shm->send("success");
 }
