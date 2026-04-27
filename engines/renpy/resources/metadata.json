@@ -1,6 +1,7 @@
 {
     "name": "libat-renpy",
     "version": "1.0.0",
+    "minAppVersion": "0.0.6",
     "dependencies": ["libat-injector"],
     "description": "Hook library for Ren'Py games",
     "type": "hook",

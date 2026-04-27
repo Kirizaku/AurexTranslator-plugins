@@ -1,6 +1,7 @@
 {
     "name": "libat-example",
     "version": "1.0.1",
+    "minAppVersion": "0.0.6",
     "dependencies": ["libat-injector"],
     "description": "Example hook plugin",
     "type": "hook",

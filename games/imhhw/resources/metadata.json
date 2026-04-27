@@ -1,6 +1,7 @@
 {
     "name": "libat-imhhw",
     "version": "1.0.1",
+    "minAppVersion": "0.0.6",
     "dependencies": ["libat-injector"],
     "description": "Hook library for IMHHW (If My Heart Had Wings) game",
     "type": "hook",

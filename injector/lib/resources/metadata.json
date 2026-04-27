@@ -1,6 +1,7 @@
 {
     "name": "libat-injector",
     "version": "1.0.1",
+    "minAppVersion": "0.0.6",
     "dependencies": ["at-injector"],
     "description": "Wrapper library for at-injector with process management and shared memory communication",
     "type": "hook",

@@ -1,6 +1,7 @@
 {
     "name": "at-injector",
     "version": "1.0.0",
+    "minAppVersion": "0.0.5",
     "dependencies": [],
     "description": "CLI tool for injecting/unloading libraries into target processes",
     "type": "hook",
