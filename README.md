@@ -11,6 +11,8 @@ aurextranslator-plugins/
 │ └── 📁 bin/     # at-injector: CLI utility for loading/unloading libraries
 ├── 📁 games/     # Game-specific plugins
 │ └── 📁 imhhw/   # If My Heart Had Wings
+├── 📁 engines/   # Engine-specific plugins
+│ └── 📁 renpy/   # Ren'Py visual novel engine
 ```
 
 
@@ -18,9 +20,9 @@ aurextranslator-plugins/
 
 The system consists of three key components that exchange data via **Shared Memory (SHM)**:
 
-### 1. Game Plugins (`games/*`)
-- Dynamic libraries written for specific games
-- Intercept text output function calls and pass the original text to SHM
+### 1. Game/Engine Plugins (`games/*`, `engines/*`)
+- Dynamic libraries written for specific games or game engines
+- Intercept text output functions and pass the original text to SHM
 
 ### 2. Injection Infrastructure (`injector/`)
 - `libat-injector` — wrapper library that manages `at-injector`: launches it with the required parameters and organizes data exchange via Shared Memory (SHM IPC)
@@ -102,6 +104,7 @@ The repository provides a template (`example/`) for creating new plugins.
 | Component | License | Path |
 |-----------|----------|------|
 | **Game plugins** (`games/*`) | MIT | `/games/` |
+| **Engine plugins** (`engines/*`) | MIT | `/engines/` |
 | **Example plugin** (`example/*`) | MIT | `/example/` |
 | **libat-injector** | GPL-3.0 | `/injector/libat-injector/` |
 | **at-injector** (CLI utility) | MIT | `/injector/bin/` |
