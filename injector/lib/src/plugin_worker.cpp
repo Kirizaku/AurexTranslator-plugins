@@ -191,6 +191,8 @@ void PluginWorker::onProcessLost(std::unique_ptr<SharedMemory>& shm)
 {
     shm.reset();
     m_processFound = false;
+    m_libraryHandle = nullptr;
+    m_pid = 0;
     emit workerMessage(tr("[Hook] Searching for process: %1").arg(m_processName));
 }
 
