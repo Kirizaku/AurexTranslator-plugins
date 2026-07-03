@@ -31,7 +31,7 @@ enum class State { WAITING_FIRST, WAITING_SECOND, WAITING_THIRD };
 
 static std::atomic<State> g_state{State::WAITING_FIRST};
 static std::atomic<uint32_t> g_saved_ecx{0};
-static SharedMemory* shm = nullptr;
+static IpcPipe* g_pipe = nullptr;
 
 std::string utf16le_to_utf8(const char16_t* utf16, size_t length) {
     std::string result;
@@ -108,9 +108,9 @@ extern "C" {
     }
 
     void hook_call_third() {
-        if (!shm) return;
+        if (!g_pipe) return;
         std::string parse = parse_strings_from_memory(g_saved_ecx);
-        shm->send(MsgType::Text, parse);
+        g_pipe->send(MsgType::Text, parse);
         g_state = State::WAITING_FIRST;
     }
 }
@@ -255,7 +255,7 @@ static uint8_t orig_third[THIRD_SIZE];
 
 // Init
 static void init() {
-    shm = new SharedMemory(SHM_NAME, SHM_SIZE, true);
+    g_pipe = new IpcPipe(PIPE_NAME, false);
 
     std::memcpy(orig_first,  reinterpret_cast<void*>(FIRST_ADDR),  FIRST_SIZE);
     std::memcpy(orig_second, reinterpret_cast<void*>(SECOND_ADDR), SECOND_SIZE);
@@ -265,7 +265,7 @@ static void init() {
     install_hook(SECOND_ADDR, reinterpret_cast<void*>(hook_second), SECOND_SIZE);
     install_hook(THIRD_ADDR,  reinterpret_cast<void*>(hook_third),  THIRD_SIZE);
 
-    shm->send(MsgType::Status, "", StatusCode::Success);
+    g_pipe->send(MsgType::Status, "", StatusCode::Success);
 }
 
 // Cleanup
@@ -274,11 +274,11 @@ static void cleanup() {
     restore_hook(SECOND_ADDR, orig_second, SECOND_SIZE);
     restore_hook(THIRD_ADDR,  orig_third,  THIRD_SIZE);
 
-    shm->cleanup();
+    g_pipe->close();
 #if defined(__linux__)
-    shm->unlink();
+    g_pipe->unlink();
 #endif
-    delete shm;
+    delete g_pipe;
 }
 
 #if defined(_WIN32)

@@ -19,7 +19,7 @@ set(COMMON_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
 add_library(libat-injector SHARED
     src/plugin_main.h src/plugin_main.cpp
     src/plugin_worker.h src/plugin_worker.cpp
-    ${COMMON_INCLUDE_DIR}/shared_memory.h
+    ${COMMON_INCLUDE_DIR}/ipc_pipe.h
     ${COMMON_INCLUDE_DIR}/plugininterface.h
 )
 

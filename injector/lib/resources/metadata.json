@@ -3,7 +3,7 @@
     "version": "1.0.1",
     "minAppVersion": "0.0.6",
     "dependencies": ["at-injector"],
-    "description": "Wrapper library for at-injector with process management and shared memory communication",
+    "description": "Wrapper library for at-injector with process management and pipe communication",
     "type": "hook",
     "target": {
         "title": "main-program",

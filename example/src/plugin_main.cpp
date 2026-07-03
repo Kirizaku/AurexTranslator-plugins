@@ -22,7 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#include "shared_memory.h"
+#include "ipc_pipe.h"
 #include "memory_utils.h"
 
 #if defined(__linux__)
@@ -30,7 +30,7 @@ SOFTWARE.
 #endif
 #include <cstdint>
 
-static SharedMemory* shm = nullptr;
+static IpcPipe* g_pipe = nullptr;
 static void* original_fwrite_addr = nullptr;
 
 typedef size_t(*fwrite_func_t)(const void* ptr, size_t size, size_t nmemb, FILE* stream);
@@ -39,7 +39,7 @@ static fwrite_func_t original_fwrite_trampoline = nullptr;
 extern "C" size_t my_fwrite(const void* ptr, size_t size, size_t nmemb, FILE* stream) {
     if (stream == stdout) {
         std::string msg(static_cast<const char*>(ptr), size * nmemb);
-        shm->send(MsgType::Text, msg);
+        g_pipe->send(MsgType::Text, msg);
     }
     return original_fwrite_trampoline(ptr, size, nmemb, stream);
 }
@@ -52,19 +52,16 @@ static void cleanup() {
     if (original_fwrite_addr)
         restore_hook(reinterpret_cast<uintptr_t>(original_fwrite_addr), original_code, hook_size);
 
-    shm->cleanup();
+    g_pipe->close();
 #if defined(__linux__)
-    shm->unlink();
+    g_pipe->unlink();
 #endif
-    delete shm;
+    delete g_pipe;
 }
 
 // Init
 static void init() {
-    const std::string SHM_NAME = "AurexTranslator_libat-example";
-    const size_t SHM_SIZE = sizeof(SharedData);
-
-    shm = new SharedMemory(SHM_NAME, SHM_SIZE, true);
+    g_pipe = new IpcPipe("AurexTranslator_libat-example", false);
 
 #if defined(__linux__)
     original_fwrite_addr = dlsym(RTLD_NEXT, "fwrite");
@@ -85,7 +82,7 @@ static void init() {
     }
 #endif
     if (!original_fwrite_addr) {
-        shm->send(MsgType::Status, "fwrite not found", StatusCode::Failure);
+        g_pipe->send(MsgType::Status, "fwrite not found", StatusCode::Failure);
         return;
     }
 
@@ -96,7 +93,7 @@ static void init() {
     std::memcpy(original_code, original_fwrite_addr, hook_size);
     install_hook(reinterpret_cast<uintptr_t>(original_fwrite_addr), reinterpret_cast<void*>(my_fwrite), hook_size);
 
-    shm->send(MsgType::Status, "", StatusCode::Success);
+    g_pipe->send(MsgType::Status, "", StatusCode::Success);
 }
 
 #if defined(_WIN32)

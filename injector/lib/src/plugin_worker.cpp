@@ -16,7 +16,6 @@
 ******************************************************************************/
 
 #include "plugin_worker.h"
-#include "shared_memory.h"
 
 #include <QThread>
 #include <QStandardPaths>
@@ -26,10 +25,7 @@
 #include <fstream>
 #include <string>
 #include <sstream>
-#include <fcntl.h>
 
-#include <sys/mman.h>
-#include <sys/stat.h>
 #include <dirent.h>
 #include <dlfcn.h>
 #include <unistd.h>
@@ -58,26 +54,35 @@ PluginWorker::PluginWorker(const QStringList &args, QObject *parent)
 void PluginWorker::stop()
 {
     m_running = false;
+
+    QMutexLocker lk(&m_confirmMutex);
+    m_confirmed = false;
+    m_waitingConfirmation = false;
+    m_confirmCondition.wakeAll();
 }
 
 void PluginWorker::run()
 {
-    const std::string SHM_NAME = "AurexTranslator_" + m_pluginName.toStdString();
-    const size_t SHM_SIZE = sizeof(SharedData);
-
     m_processFound = false;
     emit workerMessage(tr("[Hook] Searching for process: %1").arg(m_processName));
 
     m_pid_t pid = 0;
-    std::unique_ptr<SharedMemory> shm;
 
     while (m_running) {
         pid = get_pid(m_processName);
-
-        handleProcessState(pid, shm, SHM_NAME, SHM_SIZE);
-        handleSharedMemoryMessages(shm);
-
+        handleProcessState(pid);
         QThread::msleep(100);
+    }
+
+    {
+        QMutexLocker lk(&m_pipeMutex);
+        if (m_pipe) m_pipe->close();
+    }
+
+    if (m_pipeThread.joinable()) m_pipeThread.join();
+    {
+        QMutexLocker lk(&m_pipeMutex);
+        m_pipe.reset();
     }
 
     cleanupAndUnload();
@@ -92,17 +97,17 @@ void PluginWorker::onConfirmationResult(bool confirmed)
     m_confirmMutex.unlock();
 }
 
-void PluginWorker::handleProcessState(m_pid_t pid, std::unique_ptr<SharedMemory>& shm, const std::string& shmName, size_t shmSize)
+void PluginWorker::handleProcessState(m_pid_t pid)
 {
     if (pid > 0 && (!m_processFound || pid != m_pid)) {
-        onProcessFound(pid, shm, shmName, shmSize);
+        onProcessFound(pid);
     }
     else if (pid <= 0 && m_processFound) {
-        onProcessLost(shm);
+        onProcessLost();
     }
 }
 
-void PluginWorker::onProcessFound(m_pid_t pid, std::unique_ptr<SharedMemory>& shm, const std::string& shmName, size_t shmSize)
+void PluginWorker::onProcessFound(m_pid_t pid)
 {
     m_processFound = true;
     m_pid = pid;
@@ -172,6 +177,8 @@ void PluginWorker::onProcessFound(m_pid_t pid, std::unique_ptr<SharedMemory>& sh
         m_confirmCondition.wait(&m_confirmMutex);
         m_confirmMutex.unlock();
 
+        if (!m_running) return;
+
         if (!m_confirmed) {
             emit workerMessage(tr("[Hook] Injection cancelled by user"));
             stop();
@@ -179,47 +186,73 @@ void PluginWorker::onProcessFound(m_pid_t pid, std::unique_ptr<SharedMemory>& sh
         }
 
         QThread::msleep(1000);
+        emit workerMessage(tr("[Hook] Injecting into \"%1\" (PID: %2)...").arg(m_processName).arg(m_pid));
+        const std::string pipeName = "AurexTranslator_" + m_pluginName.toStdString();
+        startPipeServer(pipeName);
+
         startInjectorProcess("load", m_pid, libPath, m_processArch);
     } else {
         emit workerMessage(tr("[Hook] Injection skipped: library already loaded. Awaiting text from game..."));
     }
-
-    shm = std::make_unique<SharedMemory>(shmName, shmSize, false);
 }
 
-void PluginWorker::onProcessLost(std::unique_ptr<SharedMemory>& shm)
+void PluginWorker::onProcessLost()
 {
-    shm.reset();
+    {
+        QMutexLocker lk(&m_pipeMutex);
+        if (m_pipe) m_pipe->close();
+    }
+
+    if (m_pipeThread.joinable()) m_pipeThread.join();
+    {
+        QMutexLocker lk(&m_pipeMutex);
+        m_pipe.reset();
+    }
+
     m_processFound = false;
     m_libraryHandle = nullptr;
     m_pid = 0;
     emit workerMessage(tr("[Hook] Searching for process: %1").arg(m_processName));
 }
 
-void PluginWorker::handleSharedMemoryMessages(std::unique_ptr<SharedMemory>& shm)
+void PluginWorker::startPipeServer(const std::string& pipeName)
 {
-    if (!shm) return;
+    {
+        QMutexLocker lk(&m_pipeMutex);
+        m_pipe = std::make_unique<IpcPipe>(pipeName, true);
+    }
+    m_pipeThread = std::thread([this] { pipeReaderLoop(); });
+}
 
-    auto msg = shm->receive();
-    if (!msg) return;
+void PluginWorker::pipeReaderLoop()
+{
+    if (!m_pipe || !m_pipe->waitForConnection()) return;
+    while (true) {
+        auto msg = m_pipe->receive();
+        if (!msg) break;
+        handlePipeMessage(*msg);
+    }
+}
 
-    switch (msg->type) {
+void PluginWorker::handlePipeMessage(const IpcPipe::Message& msg)
+{
+    switch (msg.type) {
     case MsgType::Status:
-        switch (msg->status_code) {
+        switch (msg.status_code) {
         case StatusCode::Success:
             emit workerMessage(tr("[Hook] Injection succeeded (PID: %1). Awaiting text from game...").arg(m_pid));
             break;
         case StatusCode::Failure:
-            emit workerMessage(tr("[Hook] Error (PID: %1): %2").arg(m_pid).arg(QString::fromStdString(msg->text)));
+            emit workerMessage(tr("[Hook] Error (PID: %1): %2").arg(m_pid).arg(QString::fromStdString(msg.text)));
             stop();
             break;
         }
         break;
     case MsgType::Text:
-        emit currentOutput("Hook", QString::fromStdString(msg->text));
+        emit currentOutput("Hook", QString::fromStdString(msg.text));
         break;
     case MsgType::Info:
-        emit workerMessage(QString("[Hook] %1").arg(QString::fromStdString(msg->text)));
+        emit workerMessage(QString("[Hook] %1").arg(QString::fromStdString(msg.text)));
         break;
     }
 }
@@ -406,7 +439,6 @@ void PluginWorker::startInjectorProcess(const QString &command, const m_pid_t &p
     QObject::connect(process, &QProcess::finished, this, [=](int exitCode, QProcess::ExitStatus status) {
         if (exitCode == 0 && status == QProcess::NormalExit) {
             if (command == "load") {
-                emit workerMessage(tr("[Hook] Waiting for plugin response..."));
                 parseLibraryHandle(process);
             }
         } else {

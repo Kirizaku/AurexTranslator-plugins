@@ -23,8 +23,9 @@
 #include <QMap>
 #include <QMutex>
 #include <QWaitCondition>
+#include <thread>
 
-#include "shared_memory.h"
+#include "ipc_pipe.h"
 
 #if defined(Q_OS_WINDOWS)
 #include <Windows.h>
@@ -55,10 +56,12 @@ public slots:
     void onConfirmationResult(bool confirmed);
 
 private:
-    void handleProcessState(m_pid_t pid, std::unique_ptr<SharedMemory>& shm, const std::string& shmName, size_t shmSize);
-    void onProcessFound(m_pid_t pid, std::unique_ptr<SharedMemory>& shm, const std::string& shmName, size_t shmSize);
-    void onProcessLost(std::unique_ptr<SharedMemory>& shm);
-    void handleSharedMemoryMessages(std::unique_ptr<SharedMemory>& shm);
+    void handleProcessState(m_pid_t pid);
+    void onProcessFound(m_pid_t pid);
+    void onProcessLost();
+    void startPipeServer(const std::string& pipeName);
+    void pipeReaderLoop();
+    void handlePipeMessage(const IpcPipe::Message& msg);
     void cleanupAndUnload();
 
     m_pid_t get_pid(const QString &process_name);
@@ -86,6 +89,10 @@ private:
     void* m_libraryHandle = nullptr;
     bool m_running = true;
     bool m_processFound = false;
+
+    std::unique_ptr<IpcPipe> m_pipe;
+    std::thread              m_pipeThread;
+    QMutex                   m_pipeMutex;
 
     bool m_confirmed = false;
     bool m_waitingConfirmation = false;

@@ -29,7 +29,7 @@ SOFTWARE.
 #include "unicode_api.h"
 #include "renpy_text.h"
 
-static SharedMemory* shm = nullptr;
+static IpcPipe* g_pipe = nullptr;
 static uint8_t orig_bytes[64];
 static size_t patch_size = 0;
 
@@ -61,20 +61,20 @@ extern "C" void Hook_PyUnicode_Format(PyObject* format, PyObject* args) {
 
     std::string clean = strip_renpy_markup(text);
 
-    shm->send(MsgType::Text, clean.c_str());
+    g_pipe->send(MsgType::Text, clean.c_str());
 }
 
 static void init() {
 #if defined(__linux__)
     g_is_wine = detect_wine();
 #endif
-    shm = new SharedMemory(SHM_NAME, SHM_SIZE, true);
+    g_pipe = new IpcPipe(PIPE_NAME, false);
 
     void* python = find_python_module();
     g_unicode_api = detect_unicode_api(python);
 
     if (!g_unicode_api.fmt) {
-        shm->send(MsgType::Status, "PyUnicode not found", StatusCode::Failure);
+        g_pipe->send(MsgType::Status, "PyUnicode not found", StatusCode::Failure);
         return;
     }
     patch_size = get_patch_length(g_unicode_api.fmt, MIN_HOOK_SIZE);
@@ -84,7 +84,7 @@ static void init() {
     g_jump_addr = reinterpret_cast<uintptr_t>(trampoline);
     install_hook(reinterpret_cast<uintptr_t>(g_unicode_api.fmt), reinterpret_cast<void*>(hook), patch_size);
 
-    shm->send(MsgType::Status, "", StatusCode::Success);
+    g_pipe->send(MsgType::Status, "", StatusCode::Success);
 }
 
 static void cleanup() {
@@ -92,11 +92,11 @@ static void cleanup() {
         restore_hook(reinterpret_cast<uintptr_t>(g_unicode_api.fmt), orig_bytes, patch_size);
     }
 
-    shm->cleanup();
+    g_pipe->close();
 #if defined(__linux__)
-    shm->unlink();
+    g_pipe->unlink();
 #endif
-    delete shm;
+    delete g_pipe;
 }
 
 // Entry points

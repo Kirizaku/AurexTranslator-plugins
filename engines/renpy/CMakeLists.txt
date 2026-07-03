@@ -18,7 +18,7 @@ set(COMMON_SOURCES
     src/config.h
     resources/metadata.json
     ${COMMON_INCLUDE_DIR}/memory_utils.cpp ${COMMON_INCLUDE_DIR}/memory_utils.h
-    ${COMMON_INCLUDE_DIR}/shared_memory.h
+    ${COMMON_INCLUDE_DIR}/ipc_pipe.h
 )
 
 # Linux

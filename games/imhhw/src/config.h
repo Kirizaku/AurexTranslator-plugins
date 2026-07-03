@@ -25,11 +25,9 @@ SOFTWARE.
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include "shared_memory.h"
+#include "ipc_pipe.h"
 
-// shared memory
-constexpr const char*  SHM_NAME = "AurexTranslator_libat-imhhw";
-constexpr size_t       SHM_SIZE = sizeof(SharedData);
+constexpr const char*  PIPE_NAME = "AurexTranslator_libat-imhhw";
 
 constexpr uintptr_t FIRST_ADDR  = 0x004b2ca5;
 constexpr uintptr_t SECOND_ADDR = 0x0040792B;

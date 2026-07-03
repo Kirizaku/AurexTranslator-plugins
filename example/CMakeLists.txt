@@ -79,7 +79,7 @@ endif()
 add_library(libat_example SHARED
     src/plugin_main.cpp
     ${COMMON_INCLUDE_DIR}/memory_utils.cpp ${COMMON_INCLUDE_DIR}/memory_utils.h
-    ${COMMON_INCLUDE_DIR}/shared_memory.h
+    ${COMMON_INCLUDE_DIR}/ipc_pipe.h
     ${HDE_SRC}
 )
 

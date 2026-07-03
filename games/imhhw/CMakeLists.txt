@@ -35,7 +35,7 @@ add_library(libat-imhhw SHARED
     src/plugin_main.cpp
     src/config.h
     ${COMMON_INCLUDE_DIR}/memory_utils.cpp ${COMMON_INCLUDE_DIR}/memory_utils.h
-    ${COMMON_INCLUDE_DIR}/shared_memory.h
+    ${COMMON_INCLUDE_DIR}/ipc_pipe.h
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

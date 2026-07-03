@@ -25,11 +25,9 @@ SOFTWARE.
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include "shared_memory.h"
+#include "ipc_pipe.h"
 
-// shared memory
-constexpr const char*  SHM_NAME = "AurexTranslator_libat-renpy";
-constexpr size_t       SHM_SIZE = sizeof(SharedData);
+constexpr const char* PIPE_NAME = "AurexTranslator_libat-renpy";
 
 // Minimum bytes to patch: 12 on x64, 10 on x86
 constexpr size_t MIN_HOOK_SIZE = (sizeof(void*) == 8) ? 12U : 10U;
