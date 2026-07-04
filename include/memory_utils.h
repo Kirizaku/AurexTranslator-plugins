@@ -36,6 +36,20 @@ SOFTWARE.
 #define PAGE_SIZE 4096
 #endif
 
+struct ModuleInfo {
+    void*  base;
+    void*  end;
+    size_t size;
+};
+
+ModuleInfo get_main_module();
+ModuleInfo get_module(const char* name);
+
+// Pattern / signature scanning
+
+void* find_pattern(const void* start, size_t size,
+                   const uint8_t* pattern, const char* mask);
+
 // Linux-only
 
 #if defined(__linux__)

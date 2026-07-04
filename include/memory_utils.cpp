@@ -33,6 +33,246 @@ static inline T pe_read(const void* addr)
     return v;
 }
 
+// ===============================================================
+// Main module lookup
+// ===============================================================
+//
+
+#if defined(_WIN32)
+#  include <windows.h>
+#  include <tlhelp32.h>
+#else
+#  include <cstdio>
+#  include <unistd.h>
+#endif
+
+#if !defined(_WIN32)
+static bool ends_with_exe_(const char* s)
+{
+    size_t n = strlen(s);
+    if (n < 4) return false;
+    const char* t = s + n - 4;
+    return t[0] == '.' &&
+           (t[1] == 'e' || t[1] == 'E') &&
+           (t[2] == 'x' || t[2] == 'X') &&
+           (t[3] == 'e' || t[3] == 'E');
+}
+#endif
+
+static const char* basename_ptr_(const char* path)
+{
+    const char* base = path;
+    for (const char* p = path; *p; ++p)
+        if (*p == '/' || *p == '\\')
+            base = p + 1;
+    return base;
+}
+
+ModuleInfo get_main_module()
+{
+    ModuleInfo info = { nullptr, nullptr, 0 };
+
+#if defined(_WIN32)
+    char path[MAX_PATH];
+    DWORD n = GetModuleFileNameA(nullptr, path, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH)
+        return info;
+
+    return get_module(basename_ptr_(path));
+
+#else
+    // Wine PE first: find the first ".exe" mapping in /proc/self/maps
+    FILE* fp = fopen("/proc/self/maps", "r");
+    if (fp) {
+        char line[1024];
+        while (fgets(line, sizeof(line), fp)) {
+            unsigned long a = 0, b = 0;
+            char perms[8] = {0};
+            unsigned long off = 0;
+            char dev[16] = {0};
+            unsigned long inode = 0;
+            int path_pos = 0;
+
+            if (sscanf(line, "%lx-%lx %7s %lx %15s %lu %n", &a, &b, perms, &off, dev, &inode, &path_pos) < 6)
+                continue;
+
+            char* path = line + path_pos;
+            char* nl = strchr(path, '\n');
+            if (nl) *nl = 0;
+            while (*path == ' ' || *path == '\t') ++path;
+            if (*path == 0 || *path == '[')
+                continue;
+
+            if (ends_with_exe_(path)) {
+                ModuleInfo m = get_module(basename_ptr_(path));
+                fclose(fp);
+                return m;
+            }
+        }
+        fclose(fp);
+    }
+
+    // Native Linux fallback: ELF main via /proc/self/exe symlink
+    char buf[1024];
+    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (n > 0) {
+        buf[n] = 0;
+        return get_module(basename_ptr_(buf));
+    }
+    return info;
+#endif
+}
+
+// ===============================================================
+// Module lookup
+// ===============================================================
+//
+
+#if !defined(_WIN32)
+static inline char ascii_lower_(char c)
+{
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + 32) : c;
+}
+
+static bool basename_iequals_(const char* path, const char* target)
+{
+    const char* base = basename_ptr_(path);
+    while (*base && *target) {
+        if (ascii_lower_(*base) != ascii_lower_(*target))
+            return false;
+        ++base; ++target;
+    }
+    return *base == 0 && *target == 0;
+}
+#endif
+
+ModuleInfo get_module(const char* name)
+{
+    ModuleInfo info = { nullptr, nullptr, 0 };
+    if (!name || !*name)
+        return info;
+
+#if defined(_WIN32)
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+    if (snap == INVALID_HANDLE_VALUE)
+        return info;
+
+    MODULEENTRY32 me;
+    me.dwSize = sizeof(me);
+    if (Module32First(snap, &me)) {
+        do {
+            if (_stricmp(me.szModule, name) == 0) {
+                info.base = me.modBaseAddr;
+                info.size = me.modBaseSize;
+                info.end  = static_cast<uint8_t*>(me.modBaseAddr) + me.modBaseSize;
+                break;
+            }
+        } while (Module32Next(snap, &me));
+    }
+    CloseHandle(snap);
+
+#else
+    FILE* fp = fopen("/proc/self/maps", "r");
+    if (!fp)
+        return info;
+
+    uintptr_t lo = 0, hi = 0;
+    bool found = false;
+    char line[1024];
+
+    while (fgets(line, sizeof(line), fp)) {
+        unsigned long start = 0, end = 0;
+        char perms[8] = {0};
+        unsigned long off = 0;
+        char dev[16] = {0};
+        unsigned long inode = 0;
+        int path_pos = 0;
+
+        if (sscanf(line, "%lx-%lx %7s %lx %15s %lu %n", &start, &end, perms, &off, dev, &inode, &path_pos) < 6)
+            continue;
+
+        char* path = line + path_pos;
+        char* nl = strchr(path, '\n');
+        if (nl) *nl = 0;
+        while (*path == ' ' || *path == '\t') ++path;
+        if (*path == 0 || *path == '[')
+            continue;
+
+        if (basename_iequals_(path, name)) {
+            if (!found) {
+                lo = start;
+                hi = end;
+                found = true;
+            } else {
+                if (start < lo) lo = start;
+                if (end   > hi) hi = end;
+            }
+        }
+    }
+    fclose(fp);
+
+    if (!found)
+        return info;
+
+    info.base = reinterpret_cast<void*>(lo);
+    info.size = static_cast<size_t>(hi - lo);
+    info.end  = reinterpret_cast<void*>(hi);
+
+    // If this is a PE module (Wine), the file-backed vmas only cover the
+    // header and a few resource sections; the actual .text/.data live in
+    // anonymous mappings between them. Override size with SizeOfImage from
+    // the PE header — that's the authoritative module size
+    const uint8_t* b = reinterpret_cast<const uint8_t*>(lo);
+    if (hi - lo >= 0x40 && pe_read<uint16_t>(b) == 0x5A4D) {
+        const uint32_t e_lfanew = pe_read<uint32_t>(b + 0x3C);
+        // Need to reach OptionalHeader+0x38 (SizeOfImage, 4 bytes):
+        // e_lfanew + PE sig (4) + FileHeader (20) + 0x38 + 4
+        if (e_lfanew && e_lfanew <= 0x1000000u &&
+            static_cast<uintptr_t>(e_lfanew) + 24 + 0x38 + 4 <= (hi - lo)) {
+            const uint8_t* nt = b + e_lfanew;
+            if (pe_read<uint32_t>(nt) == 0x00004550u) {
+                // SizeOfImage at offset 0x38 in OptionalHeader (PE32/PE32+)
+                // OptionalHeader starts 24 bytes after the PE signature
+                const uint32_t size_of_image = pe_read<uint32_t>(nt + 24 + 0x38);
+                if (size_of_image > info.size) {
+                    info.size = size_of_image;
+                    info.end  = reinterpret_cast<void*>(lo + size_of_image);
+                }
+            }
+        }
+    }
+#endif
+    return info;
+}
+
+static inline bool pattern_match(const uint8_t* data, const uint8_t* pattern, const char* mask)
+{
+    for (; *mask; ++mask, ++data, ++pattern) {
+        if (*mask == 'x' && *data != *pattern)
+            return false;
+    }
+    return true;
+}
+
+void* find_pattern(const void* start, size_t size, const uint8_t* pattern, const char* mask)
+{
+    if (!start || !pattern || !mask)
+        return nullptr;
+
+    const size_t pat_len = strlen(mask);
+    if (pat_len == 0 || pat_len > size)
+        return nullptr;
+
+    const uint8_t* base = static_cast<const uint8_t*>(start);
+    const size_t   last = size - pat_len;
+
+    for (size_t i = 0; i <= last; ++i) {
+        if (pattern_match(base + i, pattern, mask))
+            return const_cast<uint8_t*>(base + i);
+    }
+    return nullptr;
+}
+
 #if defined(__linux__)
 #include <cstdio>
 #include <cstdint>
