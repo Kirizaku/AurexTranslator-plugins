@@ -44,6 +44,7 @@ class PluginWorker : public QObject
 public:
     explicit PluginWorker(const QStringList &args, QObject *parent = nullptr);
     bool isProcessFound() const { return m_processFound; }
+    void setConfig(const QString &json);
     void stop();
 
 signals:
@@ -63,6 +64,9 @@ private:
     void pipeReaderLoop();
     void handlePipeMessage(const IpcPipe::Message& msg);
     void cleanupAndUnload();
+
+    void applyConfigJson(const QString &json);
+    void debounceLoop();
 
     m_pid_t get_pid(const QString &process_name);
     uintptr_t get_module(const m_pid_t &pid, const QString &module_name);
@@ -98,6 +102,17 @@ private:
     bool m_waitingConfirmation = false;
     QMutex m_confirmMutex;
     QWaitCondition m_confirmCondition;
+
+    struct PendingText {
+        QString                              text;
+        std::chrono::steady_clock::time_point lastCharTime;
+    };
+    QMap<QString, PendingText> m_pendingText;
+    QMutex                     m_pendingTextMutex;
+    std::thread                m_debounceThread;
+    std::atomic<bool>          m_debounceRunning { false };
+    std::atomic<int>           m_flushIntervalMs { 350 };
+    bool                       m_streamsCharacters = false;
 };
 
 #endif // PLUGIN_WORKER_H

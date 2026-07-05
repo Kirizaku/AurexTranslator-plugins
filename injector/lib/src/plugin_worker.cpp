@@ -20,6 +20,7 @@
 #include <QThread>
 #include <QStandardPaths>
 #include <QFileInfo>
+#include <QJsonObject>
 
 #ifdef Q_OS_LINUX
 #include <fstream>
@@ -49,6 +50,15 @@ PluginWorker::PluginWorker(const QStringList &args, QObject *parent)
         if (sep == -1) continue;
         m_archPaths[entry.left(sep)] = entry.mid(sep + 1);
     }
+
+    // text_mode
+    m_streamsCharacters = (args.size() > 3 && args.at(3) == QLatin1String("per_char"));
+}
+
+void PluginWorker::setConfig(const QString &json)
+{
+    QMutexLocker lk(&m_pipeMutex);
+    applyConfigJson(json);
 }
 
 void PluginWorker::stop()
@@ -63,6 +73,14 @@ void PluginWorker::stop()
 
 void PluginWorker::run()
 {
+    // Only per_char plugins accumulate text that needs a silence-based flush;
+    // whole-text plugins forward each block immediately, so don't spin an idle
+    // poller for them
+    if (m_streamsCharacters) {
+        m_debounceRunning.store(true, std::memory_order_relaxed);
+        m_debounceThread = std::thread([this] { debounceLoop(); });
+    }
+
     m_processFound = false;
     emit workerMessage(tr("[Hook] Searching for process: %1").arg(m_processName));
 
@@ -84,6 +102,16 @@ void PluginWorker::run()
         QMutexLocker lk(&m_pipeMutex);
         m_pipe.reset();
     }
+
+    m_debounceRunning.store(false, std::memory_order_relaxed);
+    if (m_debounceThread.joinable()) m_debounceThread.join();
+    QMap<QString, PendingText> remaining;
+    {
+        QMutexLocker lk(&m_pendingTextMutex);
+        remaining.swap(m_pendingText);
+    }
+    for (auto it = remaining.begin(); it != remaining.end(); ++it)
+        emit currentOutput(it.key(), it->text);
 
     cleanupAndUnload();
 }
@@ -222,6 +250,9 @@ void PluginWorker::startPipeServer(const std::string& pipeName)
         m_pipe = std::make_unique<IpcPipe>(pipeName, true);
     }
     m_pipeThread = std::thread([this] { pipeReaderLoop(); });
+
+    QMutexLocker lk(&m_pendingTextMutex);
+    m_pendingText.clear();
 }
 
 void PluginWorker::pipeReaderLoop()
@@ -248,9 +279,23 @@ void PluginWorker::handlePipeMessage(const IpcPipe::Message& msg)
             break;
         }
         break;
-    case MsgType::Text:
-        emit currentOutput("Hook", QString::fromStdString(msg.text));
+    case MsgType::Text: {
+        const QString source = QStringLiteral("Hook");
+        const QString text = QString::fromStdString(msg.text);
+
+        if (m_streamsCharacters) {
+            // Per-character mode: accumulate and let debounceLoop flush
+            // the block after flush_interval_ms of silence
+            QMutexLocker lk(&m_pendingTextMutex);
+            PendingText& pending = m_pendingText[source];
+            pending.text += text;
+            pending.lastCharTime = std::chrono::steady_clock::now();
+        } else {
+            // Whole-text mode: each message is already a finished block
+            emit currentOutput(source, text);
+        }
         break;
+    }
     case MsgType::Info:
         emit workerMessage(QString("[Hook] %1").arg(QString::fromStdString(msg.text)));
         break;
@@ -261,6 +306,45 @@ void PluginWorker::cleanupAndUnload()
 {
     if (m_pid > 0 && m_libraryHandle) {
         startInjectorProcess("unload", m_pid, QString(), m_processArch);
+    }
+}
+
+void PluginWorker::applyConfigJson(const QString &json)
+{
+    // Live-tunable settings from the host: currently just flush_interval_ms
+    // (the per_char silence window). text_mode is NOT here -- it's a fixed fact
+    // passed once as a constructor arg. All aggregation lives here in the host;
+    const QJsonObject root = QJsonDocument::fromJson(json.toUtf8()).object();
+
+    if (root.contains(QStringLiteral("flush_interval_ms"))) {
+        const int val = root.value(QStringLiteral("flush_interval_ms")).toInt(350);
+        m_flushIntervalMs.store(qBound(10, val, 60000), std::memory_order_relaxed);
+    }
+}
+
+void PluginWorker::debounceLoop()
+{
+    while (m_debounceRunning.load(std::memory_order_relaxed)) {
+        QThread::msleep(50);
+
+        const auto now = std::chrono::steady_clock::now();
+        const int interval = m_flushIntervalMs.load(std::memory_order_relaxed);
+
+        QMap<QString, QString> ready;
+        {
+            QMutexLocker lk(&m_pendingTextMutex);
+            for (auto it = m_pendingText.begin(); it != m_pendingText.end(); ) {
+                const auto idleMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->lastCharTime).count();
+                if (idleMs >= interval) {
+                    ready.insert(it.key(), it->text);
+                    it = m_pendingText.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        for (auto it = ready.begin(); it != ready.end(); ++it)
+            emit currentOutput(it.key(), it.value());
     }
 }
 

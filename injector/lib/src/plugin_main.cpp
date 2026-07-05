@@ -72,6 +72,11 @@ QString At_injector::execute(const QString &command, const QStringList &args)
             return QString();
         }
     }
+    else if (command == "config") {
+        if (m_worker && args.size() >= 2)
+            m_worker->setConfig(args.at(1));
+        return QString();
+    }
 
     return "Unknown command";
 }
