@@ -20,6 +20,7 @@
 #include <QThread>
 #include <QStandardPaths>
 #include <QFileInfo>
+#include <QDir>
 #include <QJsonObject>
 
 #ifdef Q_OS_LINUX
@@ -160,6 +161,34 @@ void PluginWorker::onProcessFound(m_pid_t pid)
     const QString libFileName = QFileInfo(libPath).fileName();
     uintptr_t module = get_module(pid, libFileName);
 
+    if (module != 0) {
+        void* handle = nullptr;
+#if defined(Q_OS_WINDOWS)
+        handle = reinterpret_cast<void*>(module);
+#else
+        handle = persistedHandleFor(pid);
+        if (!handle) {
+            emit workerMessage(tr("[Hook] Library already loaded in \"%1\" but its handle is "
+                                  "unknown; cannot unload cleanly. Please close the game and "
+                                  "start the hook again").arg(m_processName));
+            stop();
+            return;
+        }
+#endif
+
+        emit workerMessage(tr("[Hook] Stale library found in \"%1\". Reinjecting...").arg(m_processName));
+        m_libraryHandle = handle;
+        startInjectorProcess(QStringLiteral("unload"), pid, QString(), m_processArch);
+        m_libraryHandle = nullptr;
+
+        if (!m_running) return; // unload failed and triggered stop()
+
+#ifdef Q_OS_LINUX
+        clearPersistedHandle();
+#endif
+        module = 0;
+    }
+
     if (module == 0) {
         emit workerMessage(tr("[Hook] Process \"%1\" found (PID: %2). Injecting...").arg(m_processName).arg(pid));
 
@@ -219,8 +248,6 @@ void PluginWorker::onProcessFound(m_pid_t pid)
         startPipeServer(pipeName);
 
         startInjectorProcess("load", m_pid, libPath, m_processArch);
-    } else {
-        emit workerMessage(tr("[Hook] Injection skipped: library already loaded. Awaiting text from game..."));
     }
 }
 
@@ -307,7 +334,83 @@ void PluginWorker::cleanupAndUnload()
     if (m_pid > 0 && m_libraryHandle) {
         startInjectorProcess("unload", m_pid, QString(), m_processArch);
     }
+#ifdef Q_OS_LINUX
+    clearPersistedHandle();
+#endif
 }
+
+QString PluginWorker::pluginsDir() const
+{
+    return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
+    + QStringLiteral("/plugins");
+}
+
+#ifdef Q_OS_LINUX
+void PluginWorker::persistLibraryHandle()
+{
+    const QString path = pluginsDir() + "/runtime.json";
+
+    QJsonObject root;
+    QFile in(path);
+    if (in.open(QIODevice::ReadOnly)) {
+        root = QJsonDocument::fromJson(in.readAll()).object();
+        in.close();
+    }
+
+    QJsonObject entry;
+    entry[QStringLiteral("pid")] = static_cast<qint64>(m_pid);
+    entry[QStringLiteral("handle")] = QString::asprintf("%p", m_libraryHandle);
+    root[m_pluginName] = entry;
+
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile out(path);
+    if (out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        out.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+        out.close();
+    }
+}
+
+void PluginWorker::clearPersistedHandle()
+{
+    const QString path = pluginsDir() + "/runtime.json";
+
+    QFile in(path);
+    if (!in.open(QIODevice::ReadOnly)) return;
+    QJsonObject root = QJsonDocument::fromJson(in.readAll()).object();
+    in.close();
+
+    if (!root.contains(m_pluginName)) return;
+    root.remove(m_pluginName);
+
+    QFile out(path);
+    if (out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        out.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+        out.close();
+    }
+}
+
+void* PluginWorker::persistedHandleFor(m_pid_t pid) const
+{
+    QFile in(pluginsDir() + "/runtime.json");
+    if (!in.open(QIODevice::ReadOnly)) return nullptr;
+    const QJsonObject root = QJsonDocument::fromJson(in.readAll()).object();
+    in.close();
+
+    const QJsonObject entry = root.value(m_pluginName).toObject();
+    if (entry.isEmpty()) return nullptr;
+
+    if (static_cast<m_pid_t>(entry.value(QStringLiteral("pid")).toInteger()) != pid)
+        return nullptr;
+
+    QString hex = entry.value(QStringLiteral("handle")).toString();
+    if (hex.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive))
+        hex = hex.mid(2);
+
+    bool ok = false;
+    const qulonglong addr = hex.toULongLong(&ok, 16);
+    return ok ? reinterpret_cast<void*>(addr) : nullptr;
+}
+#endif // Q_OS_LINUX
 
 void PluginWorker::applyConfigJson(const QString &json)
 {
@@ -515,9 +618,7 @@ void PluginWorker::startInjectorProcess(const QString &command, const m_pid_t &p
     ? QStringLiteral("_x86")
     : QStringLiteral("_x64");
 
-    QString programPath = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
-                          + QStringLiteral("/plugins/bin/at-injector")
-                          + archSuffix;
+    QString programPath = pluginsDir() + "/bin/at-injector" + archSuffix;
 
     QProcess *process = new QProcess();
     QObject::connect(process, &QProcess::finished, this, [=](int exitCode, QProcess::ExitStatus status) {
@@ -604,4 +705,7 @@ void PluginWorker::parseLibraryHandle(QProcess* process)
     }
 
     m_libraryHandle = reinterpret_cast<void*>(addr);
+#ifdef Q_OS_LINUX
+    persistLibraryHandle();
+#endif
 }

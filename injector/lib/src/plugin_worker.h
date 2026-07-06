@@ -65,6 +65,13 @@ private:
     void handlePipeMessage(const IpcPipe::Message& msg);
     void cleanupAndUnload();
 
+    QString pluginsDir() const;
+#ifdef Q_OS_LINUX
+    void persistLibraryHandle();
+    void clearPersistedHandle();
+    void* persistedHandleFor(m_pid_t pid) const;
+#endif
+
     void applyConfigJson(const QString &json);
     void debounceLoop();
 
