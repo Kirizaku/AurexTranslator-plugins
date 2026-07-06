@@ -231,15 +231,7 @@ public:
 #ifdef _WIN32
         HANDLE h = std::exchange(m_handle, INVALID_HANDLE_VALUE);
         if (h != INVALID_HANDLE_VALUE) {
-            // A reader thread may be blocked in ConnectNamedPipe(); closing the
-            // handle does not wake it. Briefly self-connect to release the wait.
-            if (m_is_server) {
-                HANDLE dummy = CreateFileA(m_path.c_str(),
-                                           GENERIC_READ | GENERIC_WRITE,
-                                           0, NULL, OPEN_EXISTING, 0, NULL);
-                if (dummy != INVALID_HANDLE_VALUE) CloseHandle(dummy);
-                DisconnectNamedPipe(h);
-            }
+            CancelIoEx(h, NULL);
             CloseHandle(h);
         }
 #else
