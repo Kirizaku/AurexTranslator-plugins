@@ -22,6 +22,7 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QJsonObject>
+#include <QJsonDocument>
 
 #ifdef Q_OS_LINUX
 #include <fstream>
