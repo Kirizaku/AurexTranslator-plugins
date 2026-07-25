@@ -43,6 +43,7 @@ QString At_injector::execute(const QString &command, const QStringList &args)
 
         connect(m_worker, &PluginWorker::workerMessage, this, &PluginInterface::pluginMessage);
         connect(m_worker, &PluginWorker::currentOutput, this, &PluginInterface::currentOutput);
+        connect(m_worker, &PluginWorker::processLost, this, &PluginInterface::processLost);
         connect(m_worker, &PluginWorker::confirmationRequired, this, [=](const QString& message) {
             QMessageBox msgBox(nullptr);
             msgBox.setWindowTitle(tr("Injection confirmation"));

@@ -50,6 +50,7 @@ public:
 signals:
     void workerMessage(const QString &msg);
     void currentOutput(const QString &source, const QString &out);
+    void processLost();
     void confirmationRequired(const QString& message);
 
 public slots:

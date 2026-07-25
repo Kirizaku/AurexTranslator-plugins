@@ -267,6 +267,8 @@ void PluginWorker::onProcessLost()
     m_processFound = false;
     m_libraryHandle = nullptr;
     m_pid = 0;
+
+    emit processLost();
     emit workerMessage(tr("[Hook] Searching for process: %1").arg(m_processName));
 }
 
