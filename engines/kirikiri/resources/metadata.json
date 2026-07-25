@@ -1,0 +1,14 @@
+{
+    "name": "libat-kirikiri",
+    "version": "1.0.0",
+    "minAppVersion": "0.0.7",
+    "dependencies": ["libat-injector"],
+    "description": "Hook library for KiriKiri games",
+    "type": "hook",
+    "category": "engine",
+    "target": {
+        "title": "KiriKiri",
+        "executable": ""
+    },
+    "textMode": "per_char"
+}
