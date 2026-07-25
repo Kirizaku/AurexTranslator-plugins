@@ -39,6 +39,18 @@
 #include <tlhelp32.h>
 #endif
 
+static QString sanitizeSource(QString name)
+{
+    name = name.trimmed();
+    name.remove(QLatin1Char(':'));
+    name.truncate(64);
+    if (name.size() >= 2
+        && (name.at(0) == QLatin1Char('v') || name.at(0) == QLatin1Char('g'))
+        && name.at(1).isDigit())
+        name.clear();
+    return name;
+}
+
 PluginWorker::PluginWorker(const QStringList &args, QObject *parent)
     : QObject(parent)
 {
@@ -309,12 +321,22 @@ void PluginWorker::handlePipeMessage(const IpcPipe::Message& msg)
         }
         break;
     case MsgType::Text: {
-        const QString source = QStringLiteral("Hook");
+        //   "Hook"
+        //   "Hook:v<N>"
+        //   "Hook:<label>"
+        //   "Hook:<label>:v<N>"
+        const QString label = sanitizeSource(QString::fromStdString(msg.source));
+
+        QString source = QStringLiteral("Hook");
+        if (!label.isEmpty())
+            source += QStringLiteral(":") + label;
+        if (msg.variant != 0)
+            source += QStringLiteral(":v%1").arg(msg.variant);
         const QString text = QString::fromStdString(msg.text);
 
         if (m_streamsCharacters) {
-            // Per-character mode: accumulate and let debounceLoop flush
-            // the block after flush_interval_ms of silence
+            // Per-character mode: accumulate and let debounceLoop flush the block
+            // after flush_interval_ms of silence, keyed by source
             QMutexLocker lk(&m_pendingTextMutex);
             PendingText& pending = m_pendingText[source];
             pending.text += text;

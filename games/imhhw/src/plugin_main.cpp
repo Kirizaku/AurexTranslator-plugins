@@ -110,7 +110,7 @@ extern "C" {
     void hook_call_third() {
         if (!g_pipe) return;
         std::string parse = parse_strings_from_memory(g_saved_ecx);
-        g_pipe->send(MsgType::Text, parse);
+        g_pipe->send(MsgType::Text, parse, StatusCode::Success, "Textbox");
         g_state = State::WAITING_FIRST;
     }
 }

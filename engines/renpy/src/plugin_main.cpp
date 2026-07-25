@@ -61,7 +61,7 @@ extern "C" void Hook_PyUnicode_Format(PyObject* format, PyObject* args) {
 
     std::string clean = strip_renpy_markup(text);
 
-    g_pipe->send(MsgType::Text, clean.c_str());
+    g_pipe->send(MsgType::Text, clean.c_str(), StatusCode::Success, "Textbox");
 }
 
 static void init() {

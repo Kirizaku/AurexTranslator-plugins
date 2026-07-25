@@ -35,8 +35,7 @@ struct PipeHeader {
     uint8_t  msg_type;
     uint8_t  status_code;
     uint8_t  variant;
-    uint8_t  _pad;
-    uint32_t addr;
+    uint8_t  source_len;
     uint32_t text_len;
 };
 #pragma pack(pop)
@@ -47,7 +46,7 @@ public:
         MsgType     type;
         StatusCode  status_code;
         uint8_t     variant;
-        uint32_t    addr;
+        std::string source;
         std::string text;
     };
 
@@ -189,21 +188,26 @@ public:
 
     bool send(MsgType type, const std::string& msg,
               StatusCode code = StatusCode::Success,
-              uint8_t variant = 0, uint32_t addr = 0)
+              const std::string& source = std::string(),
+              uint8_t variant = 0)
     {
 #ifdef _WIN32
         if (!m_valid || m_handle == INVALID_HANDLE_VALUE) return false;
 #else
         if (!m_valid || m_fd == -1) return false;
 #endif
+        const uint8_t source_len =
+            static_cast<uint8_t>(source.size() > 255 ? 255 : source.size());
         PipeHeader hdr{};
         hdr.msg_type    = static_cast<uint8_t>(type);
         hdr.status_code = static_cast<uint8_t>(code);
         hdr.variant     = variant;
-        hdr.addr        = addr;
+        hdr.source_len  = source_len;
         hdr.text_len    = static_cast<uint32_t>(msg.size());
         std::lock_guard<std::mutex> lk(m_send_mutex);
-        return write_all(&hdr, sizeof(hdr)) && write_all(msg.data(), msg.size());
+        return write_all(&hdr, sizeof(hdr))
+            && (source_len == 0 || write_all(source.data(), source_len))
+            && write_all(msg.data(), msg.size());
     }
 
     std::optional<Message> receive() {
@@ -218,7 +222,10 @@ public:
         msg.type        = static_cast<MsgType>(hdr.msg_type);
         msg.status_code = static_cast<StatusCode>(hdr.status_code);
         msg.variant     = hdr.variant;
-        msg.addr        = hdr.addr;
+        if (hdr.source_len > 0) {
+            msg.source.resize(hdr.source_len);
+            if (!read_all(msg.source.data(), hdr.source_len)) return std::nullopt;
+        }
         if (hdr.text_len > 0) {
             msg.text.resize(hdr.text_len);
             if (!read_all(msg.text.data(), hdr.text_len)) return std::nullopt;
