@@ -6,26 +6,27 @@ A collection of plugins for Aurex Translator — a cross-platform real-time text
 
 ```
 aurextranslator-plugins/
-├── 📁 example/   # Basic plugin example and test target
-├── 📁 injector/  # libat-injector: wrapper library for managing at-injector
-│ └── 📁 bin/     # at-injector: CLI utility for loading/unloading libraries
-├── 📁 games/     # Game-specific plugins
-│ └── 📁 imhhw/   # If My Heart Had Wings
-├── 📁 engines/   # Engine-specific plugins
-│ └── 📁 renpy/   # Ren'Py visual novel engine
+├── 📁 example/    # Basic plugin example and test target
+├── 📁 injector/   # libat-injector: wrapper library for managing at-injector
+│ └── 📁 bin/      # at-injector: CLI utility for loading/unloading libraries
+├── 📁 games/      # Game-specific plugins
+│ └── 📁 imhhw/    # If My Heart Had Wings
+├── 📁 engines/    # Engine-specific plugins
+│ ├── 📁 renpy/    # Ren'Py visual novel engine
+│ └── 📁 kirikiri/ # KiriKiri / KiriKiriZ visual novel engine
 ```
 
 
 ## 🧩 Architecture & How It Works
 
-The system consists of three key components that exchange data via **Shared Memory (SHM)**:
+The system consists of three key components that exchange data via a **named-pipe/socket protocol**:
 
 ### 1. Game/Engine Plugins (`games/*`, `engines/*`)
 - Dynamic libraries written for specific games or game engines
-- Intercept text output functions and pass the original text to SHM
+- Intercept text output functions and pass the original text over the pipe
 
 ### 2. Injection Infrastructure (`injector/`)
-- `libat-injector` — wrapper library that manages `at-injector`: launches it with the required parameters and organizes data exchange via Shared Memory (SHM IPC)
+- `libat-injector` — wrapper library that manages `at-injector`: launches it with the required parameters and organizes data exchange via a named-pipe/socket IPC
 - `at-injector` (in `bin/`) — CLI utility for loading (`load`) or unloading (`unload`) libraries into the address space of a running process. Available for x86 and x64.
 
 ### 3. Aurex Translator
