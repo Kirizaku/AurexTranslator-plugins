@@ -57,6 +57,7 @@ function(add_linux_plugin)
     target_compile_definitions(${TARGET_NAME} PRIVATE ${ARCH_DEF})
 
     set_source_files_properties(
+        ${HOOK_ASM}
         ${CMAKE_CURRENT_BINARY_DIR}/note_section_32.S
         PROPERTIES COMPILE_FLAGS "${ARCH_FLAG} -fPIC -Wa,--noexecstack"
     )
