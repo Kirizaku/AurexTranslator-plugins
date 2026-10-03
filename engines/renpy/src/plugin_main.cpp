@@ -78,9 +78,19 @@ static void init() {
         return;
     }
     patch_size = get_patch_length(g_unicode_api.fmt, MIN_HOOK_SIZE);
+    if (patch_size == 0 || patch_size > sizeof(orig_bytes)) {
+        patch_size = 0;
+        g_pipe->send(MsgType::Status, "Cannot hook PyUnicode_FromFormat", StatusCode::Failure);
+        return;
+    }
 
     std::memcpy(orig_bytes,reinterpret_cast<const void*>(g_unicode_api.fmt), patch_size);
-    void* const  trampoline = create_trampoline_with_prolog(reinterpret_cast<uintptr_t>(g_unicode_api.fmt),patch_size);
+    void* const trampoline = create_trampoline_with_prolog(reinterpret_cast<uintptr_t>(g_unicode_api.fmt), patch_size);
+    if (!trampoline) {
+        patch_size = 0;
+        g_pipe->send(MsgType::Status, "Cannot hook PyUnicode_FromFormat", StatusCode::Failure);
+        return;
+    }
     g_jump_addr = reinterpret_cast<uintptr_t>(trampoline);
     install_hook(reinterpret_cast<uintptr_t>(g_unicode_api.fmt), reinterpret_cast<void*>(hook), patch_size);
 
@@ -88,7 +98,7 @@ static void init() {
 }
 
 static void cleanup() {
-    if (g_unicode_api.fmt) {
+    if (g_unicode_api.fmt && patch_size > 0) {
         restore_hook(reinterpret_cast<uintptr_t>(g_unicode_api.fmt), orig_bytes, patch_size);
     }
 
