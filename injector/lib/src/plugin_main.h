@@ -22,7 +22,7 @@
 #include <QThread>
 #include <QTranslator>
 
-#include "plugininterface.h"
+#include "host/plugininterface.h"
 #include "plugin_worker.h"
 
 class At_injector : public PluginInterface

@@ -22,8 +22,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#include "ipc_pipe.h"
-#include "memory_utils.h"
+#include "host/ipc_pipe.h"
+#include "hook/trampoline.h"
+#include "hook/code_patch.h"
 
 #if defined(__linux__)
 #include <dlfcn.h>

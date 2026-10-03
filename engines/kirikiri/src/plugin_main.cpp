@@ -22,7 +22,9 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#include "memory_utils.h"
+#include "hook/memory_utils.h"
+#include "hook/trampoline.h"
+#include "hook/code_patch.h"
 #include "config.h"
 
 static IpcPipe* g_pipe = nullptr;

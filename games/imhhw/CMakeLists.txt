@@ -34,8 +34,9 @@ endif()
 add_library(libat-imhhw SHARED
     src/plugin_main.cpp
     src/config.h
-    ${COMMON_INCLUDE_DIR}/memory_utils.cpp ${COMMON_INCLUDE_DIR}/memory_utils.h
-    ${COMMON_INCLUDE_DIR}/ipc_pipe.h
+    ${COMMON_INCLUDE_DIR}/hook/memory_utils.cpp ${COMMON_INCLUDE_DIR}/hook/memory_utils.h
+    ${COMMON_INCLUDE_DIR}/hook/code_patch.cpp ${COMMON_INCLUDE_DIR}/hook/code_patch.h
+    ${COMMON_INCLUDE_DIR}/host/ipc_pipe.h
 )
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -52,8 +53,6 @@ target_include_directories(libat-imhhw PRIVATE
     ${COMMON_INCLUDE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
-
-target_compile_definitions(libat-imhhw PRIVATE DISABLE_GET_PATCH_LENGTH)
 
 set_target_properties(libat-imhhw PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${PLUGINS_OUTPUT_DIR}

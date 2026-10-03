@@ -14,8 +14,10 @@ set(COMMON_SOURCES
     src/plugin_main.cpp
     src/config.h
     resources/metadata.json
-    ${COMMON_INCLUDE_DIR}/memory_utils.cpp ${COMMON_INCLUDE_DIR}/memory_utils.h
-    ${COMMON_INCLUDE_DIR}/ipc_pipe.h
+    ${COMMON_INCLUDE_DIR}/hook/memory_utils.cpp ${COMMON_INCLUDE_DIR}/hook/memory_utils.h
+    ${COMMON_INCLUDE_DIR}/hook/code_patch.cpp ${COMMON_INCLUDE_DIR}/hook/code_patch.h
+    ${COMMON_INCLUDE_DIR}/hook/trampoline.cpp ${COMMON_INCLUDE_DIR}/hook/trampoline.h
+    ${COMMON_INCLUDE_DIR}/host/ipc_pipe.h
 )
 
 # Linux (x86 only)
@@ -25,9 +27,9 @@ function(add_linux_plugin)
     set(OUTPUT_NAME "libat-kirikiri_x86")
     set(ARCH_FLAG "-m32")
     set(HDE_SOURCES
-        ${COMMON_INCLUDE_DIR}/hde/hde32.cpp
-        ${COMMON_INCLUDE_DIR}/hde/hde32.h
-        ${COMMON_INCLUDE_DIR}/hde/table32.h
+        ${COMMON_INCLUDE_DIR}/hook/hde/hde32.cpp
+        ${COMMON_INCLUDE_DIR}/hook/hde/hde32.h
+        ${COMMON_INCLUDE_DIR}/hook/hde/table32.h
     )
     set(HOOK_ASM src/hook/hook_x86.S)
     set(ARCH_DEF BUILD_X32)
@@ -79,9 +81,9 @@ function(add_windows_plugin)
     set(TARGET_NAME "libat-kirikiri-x86")
     set(OUTPUT_NAME "libat-kirikiri_x86")
     set(HDE_SOURCES
-        ${COMMON_INCLUDE_DIR}/hde/hde32.cpp
-        ${COMMON_INCLUDE_DIR}/hde/hde32.h
-        ${COMMON_INCLUDE_DIR}/hde/table32.h
+        ${COMMON_INCLUDE_DIR}/hook/hde/hde32.cpp
+        ${COMMON_INCLUDE_DIR}/hook/hde/hde32.h
+        ${COMMON_INCLUDE_DIR}/hook/hde/table32.h
     )
     set(ARCH_DEF BUILD_X32)
 

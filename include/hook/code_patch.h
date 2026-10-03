@@ -22,10 +22,15 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#ifndef PYTHON_RUNTIME_H
-#define PYTHON_RUNTIME_H
+#ifndef CODE_PATCH_H
+#define CODE_PATCH_H
 
-// Finds the base address / module handle
-void* find_python_module();
+#include <cstddef>
+#include <cstdint>
 
-#endif // PYTHON_RUNTIME_H
+void install_hook(uintptr_t addr, void* handler, size_t size);
+bool install_hook_rel32(uintptr_t addr, uintptr_t dest);
+void restore_hook(uintptr_t addr, const uint8_t* orig, size_t size);
+bool write_code(uintptr_t addr, const void* bytes, size_t n);
+
+#endif // CODE_PATCH_H

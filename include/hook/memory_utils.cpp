@@ -22,7 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#include "memory_utils.h"
+#include "hook/memory_utils.h"
 #include <cstring>
 
 template<typename T>
@@ -43,6 +43,8 @@ static inline T pe_read(const void* addr)
 #  include <tlhelp32.h>
 #else
 #  include <cstdio>
+#  include <sys/syscall.h>
+#  include <sys/uio.h>
 #  include <unistd.h>
 #endif
 
@@ -433,218 +435,41 @@ void set_protection(void* addr, size_t size, int prot, int* old_prot)
 #endif  // __linux__
 
 // ===============================================================
-// Disassembler / trampoline
+// Wine detection
 // ===============================================================
 
-#ifndef DISABLE_GET_PATCH_LENGTH
+#if defined(__linux__)
+bool g_is_wine = false;
 
-#if defined(__x86_64__) || defined(_M_X64)
-#include "hde/hde64.h"
-using hde_t = hde64s;
-#define hde_disasm hde64_disasm
-#else
-#include "hde/hde32.h"
-using hde_t = hde32s;
-#define hde_disasm hde32_disasm
-#endif
-
-// Patch rel32 / RIP-relative displacement in a copied instruction sequence
-static void fix_relative_instructions(uint8_t* tramp,
-                                      uintptr_t orig_addr,
-                                      size_t    prolog_size)
-{
-    size_t offset = 0;
-    while (offset < prolog_size) {
-#if defined(__x86_64__) || defined(_M_X64)
-        hde64s hs;
-        const size_t insn_len = hde64_disasm(tramp + offset, &hs);
-        if (hs.flags & F_ERROR) return;
-        uint8_t* p = tramp + offset;
-        const uint8_t op = hs.opcode;
-
-        // Recalculate a rel32 field so that the same absolute target is reached
-        auto patch_rel32 = [&](size_t field_offset) {
-            int32_t  old_rel = pe_read<int32_t>(p + field_offset);
-            intptr_t abs_target = static_cast<intptr_t>(orig_addr + offset + insn_len) + old_rel;
-            intptr_t new_rel = abs_target - static_cast<intptr_t>(reinterpret_cast<uintptr_t>(p) + insn_len);
-            if (new_rel < INT32_MIN || new_rel > INT32_MAX) {
-                return;
-            }
-            memcpy(p + field_offset, &new_rel, 4);
-        };
-
-        // call rel32 / jmp rel32 - disp32
-        if ((op == 0xE8 || op == 0xE9) && (hs.flags & F_IMM32))
-            patch_rel32(insn_len - 4);
-
-        // RIP-relative - disp32
-        if ((hs.flags & F_DISP32) && hs.modrm_mod == 0 && hs.modrm_rm == 5) {
-            size_t imm_size = 0;
-            if (hs.flags & F_IMM32)      imm_size = 4;
-            else if (hs.flags & F_IMM16) imm_size = 2;
-            else if (hs.flags & F_IMM8)  imm_size = 1;
-            patch_rel32(insn_len - imm_size - 4);
-        }
-
-        offset += insn_len;
-#else   // x86-32
-        hde32s hs;
-        uint8_t* p = tramp + offset;
-        const size_t insn_len = hde32_disasm(p, &hs);
-        if (hs.flags & F_ERROR)
-            return;
-
-        const uint8_t op = hs.opcode;
-
-        // call rel32 (E8) / jmp rel32 (E9).
-        if ((op == 0xE8 || op == 0xE9) && (hs.flags & F_IMM32)) {
-            int32_t  old_rel = pe_read<int32_t>(p + insn_len - 4);
-            intptr_t abs_target = static_cast<intptr_t>(orig_addr + offset + insn_len) + old_rel;
-            int32_t  new_rel = static_cast<int32_t>(abs_target - static_cast<intptr_t>(reinterpret_cast<uintptr_t>(p) + insn_len));
-            memcpy(p + insn_len - 4, &new_rel, 4);
-        }
-
-        // ADD EAX, imm32 (0x05) — get_pc_thunk / GOT setup in PIC code
-        if (op == 0x05) {
-            uint32_t old_imm = pe_read<uint32_t>(p + 1);
-            uintptr_t got_base = (orig_addr + offset + insn_len) + old_imm;
-            uint32_t  new_imm = static_cast<uint32_t>(got_base - (reinterpret_cast<uintptr_t>(p) + insn_len));
-            memcpy(p + 1, &new_imm, 4);
-        }
-
-        offset += insn_len;
-#endif
+bool detect_wine() {
+    FILE* f = fopen("/proc/self/maps", "r");
+    if (!f) return false;
+    char line[512];
+    bool found = false;
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, "ntdll.dll")) { found = true; break; }
     }
+    fclose(f);
+    return found;
 }
-
-void* create_trampoline_with_prolog(uintptr_t target_func, size_t prolog_size)
-{
-    if (!target_func || prolog_size == 0)
-        return nullptr;
-
-    // prolog copy + absolute jump back
-#if defined(__x86_64__) || defined(_M_X64)
-    constexpr size_t jmp_size = 12;  // MOV RAX, imm64 (10 bytes) + JMP RAX (2 bytes)
-#else
-    constexpr size_t jmp_size = 5;   // JMP rel32 (5 bytes)
 #endif
-    const size_t trampoline_size = prolog_size + jmp_size;
-
-#ifdef _WIN32
-    void* trampoline = VirtualAlloc(nullptr, trampoline_size,
-                                    MEM_COMMIT | MEM_RESERVE,
-                                    PAGE_EXECUTE_READWRITE);
-#else
-    void* trampoline = mmap(nullptr, trampoline_size,
-                            PROT_READ | PROT_WRITE | PROT_EXEC,
-                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (trampoline == MAP_FAILED)
-        return nullptr;
-#endif
-    if (!trampoline)
-        return nullptr;
-
-    uint8_t* tramp = static_cast<uint8_t*>(trampoline);
-
-    // Copy the original prolog and fix up any PC-relative instructions.
-    std::memcpy(tramp, reinterpret_cast<const void*>(target_func), prolog_size);
-    fix_relative_instructions(tramp, target_func, prolog_size);
-
-    uint8_t* p = tramp + prolog_size;
-    const uintptr_t resume_addr = target_func + prolog_size;
-
-#if defined(__x86_64__) || defined(_M_X64)
-    // MOV RAX, imm64
-    p[0] = 0x48; p[1] = 0xB8;
-    memcpy(p + 2, &resume_addr, 8);
-    // JMP RAX
-    p[10] = 0xFF; p[11] = 0xE0;
-#else
-    const int32_t rel = static_cast<int32_t>(resume_addr - (reinterpret_cast<uintptr_t>(p) + 5));
-    p[0] = 0xE9;
-    memcpy(p + 1, &rel, 4);
-#endif
-
-    return trampoline;
-}
-
-size_t get_patch_length(void* target, size_t min_size)
-{
-    size_t total = 0;
-    while (total < min_size) {
-        hde_t  hs;
-        size_t len = hde_disasm(static_cast<uint8_t*>(target) + total, &hs);
-        if (hs.flags & F_ERROR)
-            return 0;
-        total += len;
-    }
-    return total;
-}
-
-#endif  // DISABLE_GET_PATCH_LENGTH
 
 // ===============================================================
-// Hook install / restore
+// Reading untrusted pointers
 // ===============================================================
 
-void install_hook(uintptr_t addr, void* handler, size_t size)
+bool safe_read(const void* src, void* dst, size_t n)
 {
-#ifdef _WIN32
-    DWORD oldProt = 0;
-    VirtualProtect(reinterpret_cast<void*>(addr), size,
-                   PAGE_EXECUTE_READWRITE, &oldProt);
+#if defined(_WIN32)
+    SIZE_T got = 0;
+    return ReadProcessMemory(GetCurrentProcess(), src, dst, n, &got) && got == n;
 #else
-    int oldProt = 0;
-    set_protection(reinterpret_cast<void*>(addr), size,
-                   PROT_READ | PROT_WRITE | PROT_EXEC, &oldProt);
-#endif
+    static int pid = 0;
+    if (!pid)
+        pid = static_cast<int>(syscall(SYS_getpid));
 
-    uint8_t *p = reinterpret_cast<uint8_t*>(addr);
-
-#if defined(__x86_64__) || defined(_M_X64)
-    // MOV RAX, imm64 + JMP RAX - absolute
-    p[0] = 0x48;
-    p[1] = 0xB8;
-    *reinterpret_cast<uint64_t *>(p + 2) =
-        reinterpret_cast<uint64_t>(handler);
-
-    p[10] = 0xFF;
-    p[11] = 0xE0;
-
-    for (size_t i = 12; i < size; ++i)
-        p[i] = 0x90; // NOP
-#else
-    // JMP rel32
-    p[0] = 0xE9;
-    uint32_t rel = static_cast<uint32_t>(
-        reinterpret_cast<uintptr_t>(handler) - addr - 5);
-    *reinterpret_cast<uint32_t *>(p + 1) = rel;
-
-    for (size_t i = 5; i < size; ++i)
-        p[i] = 0x90; // NOP
-#endif
-
-#ifdef _WIN32
-    VirtualProtect(reinterpret_cast<void*>(addr), size,
-                   oldProt, &oldProt);
-#else
-    set_protection(reinterpret_cast<void*>(addr), size, oldProt);
-#endif
-}
-
-void restore_hook(uintptr_t addr, const uint8_t* orig, size_t size) {
-#ifdef _WIN32
-    DWORD old_prot;
-    VirtualProtect(reinterpret_cast<void*>(addr), size, PAGE_EXECUTE_READWRITE, &old_prot);
-#else
-    int old_prot;
-    set_protection(reinterpret_cast<void*>(addr), size, PROT_READ | PROT_WRITE | PROT_EXEC, &old_prot);
-#endif
-
-    std::memcpy(reinterpret_cast<void*>(addr), orig, size);
-#ifdef _WIN32
-    VirtualProtect(reinterpret_cast<void*>(addr), size, old_prot, &old_prot);
-#else
-    set_protection(reinterpret_cast<void*>(addr), size, old_prot);
+    struct iovec local = { dst, n };
+    struct iovec remote = { const_cast<void*>(src), n };
+    return process_vm_readv(pid, &local, 1, &remote, 1, 0) == static_cast<ssize_t>(n);
 #endif
 }

@@ -23,6 +23,7 @@ SOFTWARE.
 */
 
 #include "python_runtime.h"
+#include "hook/memory_utils.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -35,22 +36,6 @@ SOFTWARE.
     #include <tlhelp32.h>
 #elif defined(__linux__)
     #include <dlfcn.h>
-#endif
-
-#if defined(__linux__)
-bool g_is_wine = false;
-
-bool detect_wine() {
-    FILE* f = fopen("/proc/self/maps", "r");
-    if (!f) return false;
-    char line[512];
-    bool found = false;
-    while (fgets(line, sizeof(line), f)) {
-        if (strstr(line, "ntdll.dll")) { found = true; break; }
-    }
-    fclose(f);
-    return found;
-}
 #endif
 
 // internal

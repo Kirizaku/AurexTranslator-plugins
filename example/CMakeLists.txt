@@ -63,23 +63,25 @@ endif()
 
 if (IS_32_BIT)
     set(HDE_SRC
-        ${COMMON_INCLUDE_DIR}/hde/hde32.cpp
-        ${COMMON_INCLUDE_DIR}/hde/hde32.h
-        ${COMMON_INCLUDE_DIR}/hde/table32.h
+        ${COMMON_INCLUDE_DIR}/hook/hde/hde32.cpp
+        ${COMMON_INCLUDE_DIR}/hook/hde/hde32.h
+        ${COMMON_INCLUDE_DIR}/hook/hde/table32.h
     )
 else()
     set(HDE_SRC
-        ${COMMON_INCLUDE_DIR}/hde/hde64.cpp
-        ${COMMON_INCLUDE_DIR}/hde/hde64.h
-        ${COMMON_INCLUDE_DIR}/hde/table64.h
+        ${COMMON_INCLUDE_DIR}/hook/hde/hde64.cpp
+        ${COMMON_INCLUDE_DIR}/hook/hde/hde64.h
+        ${COMMON_INCLUDE_DIR}/hook/hde/table64.h
     )
 endif()
 
 # Test plugin
 add_library(libat_example SHARED
     src/plugin_main.cpp
-    ${COMMON_INCLUDE_DIR}/memory_utils.cpp ${COMMON_INCLUDE_DIR}/memory_utils.h
-    ${COMMON_INCLUDE_DIR}/ipc_pipe.h
+    ${COMMON_INCLUDE_DIR}/hook/memory_utils.cpp ${COMMON_INCLUDE_DIR}/hook/memory_utils.h
+    ${COMMON_INCLUDE_DIR}/hook/code_patch.cpp ${COMMON_INCLUDE_DIR}/hook/code_patch.h
+    ${COMMON_INCLUDE_DIR}/hook/trampoline.cpp ${COMMON_INCLUDE_DIR}/hook/trampoline.h
+    ${COMMON_INCLUDE_DIR}/host/ipc_pipe.h
     ${HDE_SRC}
 )
 

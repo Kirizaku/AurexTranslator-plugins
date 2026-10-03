@@ -25,7 +25,7 @@
 #include <QWaitCondition>
 #include <thread>
 
-#include "ipc_pipe.h"
+#include "host/ipc_pipe.h"
 
 #if defined(Q_OS_WINDOWS)
 #include <Windows.h>

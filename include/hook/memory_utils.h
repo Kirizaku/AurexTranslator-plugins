@@ -55,18 +55,12 @@ void* find_pattern(const void* start, size_t size,
 #if defined(__linux__)
 void* find_export(void* module_base, const char* target);
 void set_protection(void* addr, size_t size, int prot, int* old_prot = nullptr);
+
+extern bool g_is_wine;
+bool detect_wine();
 #endif
 
-// Disassembler / trampoline
-
-#ifndef DISABLE_GET_PATCH_LENGTH
-void* create_trampoline_with_prolog(uintptr_t target_func, size_t prolog_size);
-size_t get_patch_length(void* target, size_t min_size);
-#endif
-
-// Hook install / restore
-
-void install_hook(uintptr_t addr, void* handler, size_t size);
-void restore_hook(uintptr_t addr, const uint8_t* orig, size_t size);
+// Reading untrusted pointers
+bool safe_read(const void* src, void* dst, size_t n);
 
 #endif // MEMORY_UTILS_H

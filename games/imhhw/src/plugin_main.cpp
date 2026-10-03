@@ -22,7 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#include "memory_utils.h"
+#include "hook/code_patch.h"
 #include "config.h"
 
 #include <atomic>

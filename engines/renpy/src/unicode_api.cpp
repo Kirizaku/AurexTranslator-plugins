@@ -24,7 +24,7 @@ SOFTWARE.
 
 #include "unicode_api.h"
 #include "python_runtime.h"
-#include "memory_utils.h"
+#include "hook/memory_utils.h"
 
 #include <string>
 

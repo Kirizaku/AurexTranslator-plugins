@@ -25,7 +25,7 @@ SOFTWARE.
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include "ipc_pipe.h"
+#include "host/ipc_pipe.h"
 
 constexpr const char* PIPE_NAME = "AurexTranslator_libat-kirikiri";
 

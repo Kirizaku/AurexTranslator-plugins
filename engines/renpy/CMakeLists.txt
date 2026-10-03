@@ -17,8 +17,10 @@ set(COMMON_SOURCES
     src/renpy_text.cpp src/renpy_text.h
     src/config.h
     resources/metadata.json
-    ${COMMON_INCLUDE_DIR}/memory_utils.cpp ${COMMON_INCLUDE_DIR}/memory_utils.h
-    ${COMMON_INCLUDE_DIR}/ipc_pipe.h
+    ${COMMON_INCLUDE_DIR}/hook/memory_utils.cpp ${COMMON_INCLUDE_DIR}/hook/memory_utils.h
+    ${COMMON_INCLUDE_DIR}/hook/code_patch.cpp ${COMMON_INCLUDE_DIR}/hook/code_patch.h
+    ${COMMON_INCLUDE_DIR}/hook/trampoline.cpp ${COMMON_INCLUDE_DIR}/hook/trampoline.h
+    ${COMMON_INCLUDE_DIR}/host/ipc_pipe.h
 )
 
 # Linux
@@ -29,9 +31,9 @@ function(add_linux_plugin BITNESS)
         set(OUTPUT_NAME "libat-renpy_x86")
         set(ARCH_FLAG "-m32")
         set(HDE_SOURCES
-            ${COMMON_INCLUDE_DIR}/hde/hde32.cpp
-            ${COMMON_INCLUDE_DIR}/hde/hde32.h
-            ${COMMON_INCLUDE_DIR}/hde/table32.h
+            ${COMMON_INCLUDE_DIR}/hook/hde/hde32.cpp
+            ${COMMON_INCLUDE_DIR}/hook/hde/hde32.h
+            ${COMMON_INCLUDE_DIR}/hook/hde/table32.h
         )
     set(HOOK_ASM src/hook/hook_x86.S)
         set(ARCH_DEF BUILD_X32)
@@ -40,9 +42,9 @@ function(add_linux_plugin BITNESS)
         set(OUTPUT_NAME "libat-renpy_x64")
         set(ARCH_FLAG "-m64")
         set(HDE_SOURCES
-            ${COMMON_INCLUDE_DIR}/hde/hde64.cpp
-            ${COMMON_INCLUDE_DIR}/hde/hde64.h
-            ${COMMON_INCLUDE_DIR}/hde/table64.h
+            ${COMMON_INCLUDE_DIR}/hook/hde/hde64.cpp
+            ${COMMON_INCLUDE_DIR}/hook/hde/hde64.h
+            ${COMMON_INCLUDE_DIR}/hook/hde/table64.h
         )
     set(HOOK_ASM src/hook/hook_x64.S)
         set(ARCH_DEF BUILD_X64)
@@ -92,18 +94,18 @@ function(add_windows_plugin)
         set(TARGET_NAME "libat-renpy-x64")
         set(OUTPUT_NAME "libat-renpy_x64")
         set(HDE_SOURCES
-            ${COMMON_INCLUDE_DIR}/hde/hde64.cpp
-            ${COMMON_INCLUDE_DIR}/hde/hde64.h
-            ${COMMON_INCLUDE_DIR}/hde/table64.h
+            ${COMMON_INCLUDE_DIR}/hook/hde/hde64.cpp
+            ${COMMON_INCLUDE_DIR}/hook/hde/hde64.h
+            ${COMMON_INCLUDE_DIR}/hook/hde/table64.h
         )
         set(ARCH_DEF BUILD_X64)
     else()
         set(TARGET_NAME "libat-renpy-x86")
         set(OUTPUT_NAME "libat-renpy_x86")
         set(HDE_SOURCES
-            ${COMMON_INCLUDE_DIR}/hde/hde32.cpp
-            ${COMMON_INCLUDE_DIR}/hde/hde32.h
-            ${COMMON_INCLUDE_DIR}/hde/table32.h
+            ${COMMON_INCLUDE_DIR}/hook/hde/hde32.cpp
+            ${COMMON_INCLUDE_DIR}/hook/hde/hde32.h
+            ${COMMON_INCLUDE_DIR}/hook/hde/table32.h
         )
         set(ARCH_DEF BUILD_X32)
     endif()

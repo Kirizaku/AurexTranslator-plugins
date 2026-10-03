@@ -22,10 +22,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#ifndef PYTHON_RUNTIME_H
-#define PYTHON_RUNTIME_H
+#ifndef TRAMPOLINE_H
+#define TRAMPOLINE_H
 
-// Finds the base address / module handle
-void* find_python_module();
+#include <cstddef>
+#include <cstdint>
 
-#endif // PYTHON_RUNTIME_H
+void* alloc_exec_near(uintptr_t target, size_t size); // RWX memory reachable from target with rel32
+void* create_trampoline_with_prolog(uintptr_t target_func, size_t prolog_size);
+size_t get_patch_length(void* target, size_t min_size);
+
+#endif // TRAMPOLINE_H
