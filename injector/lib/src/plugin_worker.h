@@ -74,6 +74,7 @@ private:
 #endif
 
     void applyConfigJson(const QString &json);
+    void writeSettingsFile();
     void debounceLoop();
 
     m_pid_t get_pid(const QString &process_name);
@@ -96,6 +97,7 @@ private:
     m_pid_t m_pid = 0;
     QString m_processName;
     QString m_pluginName;
+    QString m_settingsText;
     QMap<QString, QString> m_archPaths;
     arch m_processArch = arch::Unknown;
     void* m_libraryHandle = nullptr;

@@ -21,6 +21,7 @@
 #include <QStandardPaths>
 #include <QFileInfo>
 #include <QDir>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonDocument>
 
@@ -260,6 +261,7 @@ void PluginWorker::onProcessFound(m_pid_t pid)
         const std::string pipeName = "AurexTranslator_" + m_pluginName.toStdString();
         startPipeServer(pipeName);
 
+        writeSettingsFile();
         startInjectorProcess("load", m_pid, libPath, m_processArch);
     }
 }
@@ -448,6 +450,49 @@ void PluginWorker::applyConfigJson(const QString &json)
         const int val = root.value(QStringLiteral("flush_interval_ms")).toInt(350);
         m_flushIntervalMs.store(qBound(10, val, 60000), std::memory_order_relaxed);
     }
+
+    if (root.contains(QStringLiteral("settings"))) {
+        const QJsonObject settings = root.value(QStringLiteral("settings")).toObject();
+        const auto line = [](const QString &key, QString value) {
+            value.replace(QLatin1Char('\n'), QLatin1Char(' ')).replace(QLatin1Char('\r'), QLatin1Char(' '));
+            value = value.trimmed();
+            return value.isEmpty() ? QString() : key + QLatin1Char('=') + value + QLatin1Char('\n');
+        };
+
+        QString text;
+        for (auto it = settings.constBegin(); it != settings.constEnd(); ++it) {
+            if (it->isBool()) {
+                text += line(it.key(), it->toBool() ? QStringLiteral("1") : QStringLiteral("0"));
+            } else if (it->isArray()) {
+                for (const QJsonValue &item : it->toArray())
+                    text += line(it.key(), item.toString());
+            } else {
+                text += line(it.key(), it->toVariant().toString());
+            }
+        }
+        m_settingsText = text;
+    }
+}
+
+void PluginWorker::writeSettingsFile()
+{
+    QString text;
+    {
+        QMutexLocker lk(&m_pipeMutex);
+        text = m_settingsText;
+    }
+
+    const QDir dir(pluginsDir() + QStringLiteral("/settings"));
+    const QString path = dir.filePath(m_pluginName + QStringLiteral(".ini"));
+    if (text.isEmpty()) {
+        QFile::remove(path);
+        return;
+    }
+
+    QDir().mkpath(dir.absolutePath());
+    QFile file(path);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+        file.write(text.toUtf8());
 }
 
 void PluginWorker::debounceLoop()
