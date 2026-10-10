@@ -205,10 +205,10 @@ public:
         hdr.source_len  = source_len;
         hdr.text_len    = static_cast<uint32_t>(msg.size());
         const size_t total = sizeof(hdr) + source_len + msg.size();
-        char small[1024];
+        char small_buf[1024];
         std::string big;
-        char* buf = small;
-        if (total > sizeof(small)) {
+        char* buf = small_buf;
+        if (total > sizeof(small_buf)) {
             big.resize(total);
             buf = &big[0];
         }
