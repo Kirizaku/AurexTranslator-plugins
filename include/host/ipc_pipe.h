@@ -204,10 +204,20 @@ public:
         hdr.variant     = variant;
         hdr.source_len  = source_len;
         hdr.text_len    = static_cast<uint32_t>(msg.size());
+        const size_t total = sizeof(hdr) + source_len + msg.size();
+        char small[1024];
+        std::string big;
+        char* buf = small;
+        if (total > sizeof(small)) {
+            big.resize(total);
+            buf = &big[0];
+        }
+        std::memcpy(buf, &hdr, sizeof(hdr));
+        std::memcpy(buf + sizeof(hdr), source.data(), source_len);
+        std::memcpy(buf + sizeof(hdr) + source_len, msg.data(), msg.size());
+
         std::lock_guard<std::mutex> lk(m_send_mutex);
-        return write_all(&hdr, sizeof(hdr))
-            && (source_len == 0 || write_all(source.data(), source_len))
-            && write_all(msg.data(), msg.size());
+        return write_all(buf, total);
     }
 
     std::optional<Message> receive() {
