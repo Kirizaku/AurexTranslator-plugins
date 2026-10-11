@@ -13,7 +13,8 @@ aurextranslator-plugins/
 │ └── 📁 imhhw/    # If My Heart Had Wings
 ├── 📁 engines/    # Engine-specific plugins
 │ ├── 📁 renpy/    # Ren'Py visual novel engine
-│ └── 📁 kirikiri/ # KiriKiri / KiriKiriZ visual novel engine
+│ ├── 📁 kirikiri/ # KiriKiri / KiriKiriZ visual novel engine
+│ └── 📁 unity/    # Unity games (Mono and IL2CPP)
 ```
 
 

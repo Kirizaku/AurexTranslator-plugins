@@ -1,0 +1,86 @@
+{
+    "name": "libat-unity",
+    "version": "1.2.0",
+    "minAppVersion": "0.0.9",
+    "dependencies": [
+        "libat-injector"
+    ],
+    "description": "Hook library for Unity games (Mono and IL2CPP)",
+    "type": "hook",
+    "category": "engine",
+    "target": {
+        "title": "Unity",
+        "executable": ""
+    },
+    "settings": [
+        {
+            "key": "engine_strings",
+            "type": "bool",
+            "default": true,
+            "label": { 
+                "en": "Strings passed to the engine", 
+                "ru": "Строки, передаваемые движку" 
+            },
+            "hint": { 
+                "en": "Text the game hands to the engine to draw. Some service noise", 
+                "ru": "Текст, который игра отдает движку для отрисовки. Немного служебного шума" 
+            }
+        },
+        {
+            "key": "created_strings",
+            "type": "bool",
+            "default": false,
+            "label": { 
+                "en": "Strings created by the engine", 
+                "ru": "Строки, создаваемые движком" 
+            },
+            "hint": { 
+                "en": "Loading and localization data. May produce a lot of noise", 
+                "ru": "Данные загрузки и локализации. Возможно много шума" 
+            }
+        },
+        {
+            "key": "system_string",
+            "type": "bool",
+            "default": false,
+            "label": { 
+                "en": "System.String methods", 
+                "ru": "Методы System.String" 
+            },
+            "hint": { 
+                "en": "Search mode for games with their own text system. May slow the game down", 
+                "ru": "Режим поиска для игр со своей системой текста. Может замедлить игру" 
+            }
+        },
+        {
+            "key": "split_by_object",
+            "type": "bool",
+            "default": false,
+            "label": { 
+                "en": "Separate source for every text object", 
+                "ru": "Отдельный источник для каждого текстового объекта" 
+            },
+            "hint": { 
+                "en": "Texts that share one method stop overwriting each other", 
+                "ru": "Тексты с общим методом перестают перезаписывать друг друга" 
+            }
+        },
+        {
+            "key": "hook",
+            "type": "list",
+            "source_map": { "String": "System.String" },
+            "example": {
+                "en": "MyGame.UI.DialogBox.Show\nMyGame.Quests.QuestLog.*", 
+                "ru": "MyGame.UI.DialogBox.Show\nMyGame.Quests.QuestLog.*" 
+            },
+            "label": { 
+                "en": "Own hooks, one Namespace.Class.Method per line", 
+                "ru": "Свои хуки, по одному Namespace.Class.Method на строку" 
+            },
+            "hint": { 
+                "en": "The method may be *. The string arguments of the method become the text. Right-click a found block in the selector and choose Add to plugin hooks to fill this in", 
+                "ru": "Вместо метода можно указать *. Текстом становятся строковые аргументы метода. Щелкните правой кнопкой по найденному блоку в селекторе и выберите «Добавить в хуки плагина», чтобы заполнить список" 
+            }
+        }
+    ]
+}
