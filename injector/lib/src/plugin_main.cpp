@@ -73,6 +73,19 @@ QString At_injector::execute(const QString &command, const QStringList &args)
             return QString();
         }
     }
+#ifdef Q_OS_LINUX
+    else if (command == "ptrace-status") {
+        switch (PluginWorker::ptraceStatus()) {
+        case PluginWorker::PtraceStatus::Granted: return QStringLiteral("granted");
+        case PluginWorker::PtraceStatus::Missing: return QStringLiteral("missing");
+        default:                                  return QStringLiteral("unavailable");
+        }
+    }
+    else if (command == "ptrace-grant") {
+        const QString error = PluginWorker::grantPtrace();
+        return error.isEmpty() ? QStringLiteral("ok") : error;
+    }
+#endif
     else if (command == "config") {
         if (m_worker && args.size() >= 2)
             m_worker->setConfig(args.at(1));

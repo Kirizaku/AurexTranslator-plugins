@@ -18,6 +18,7 @@
 #include "plugin_worker.h"
 
 #include <QThread>
+#include <QEventLoop>
 #include <QStandardPaths>
 #include <QFileInfo>
 #include <QDir>
@@ -366,7 +367,7 @@ void PluginWorker::cleanupAndUnload()
 #endif
 }
 
-QString PluginWorker::pluginsDir() const
+QString PluginWorker::pluginsDir()
 {
     return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
     + QStringLiteral("/plugins");
@@ -679,6 +680,78 @@ bool PluginWorker::hasCapability(cap_value_t cap, const QString &programPath)
     cap_free(caps);
 
     return (value == CAP_SET);
+}
+#endif
+
+#ifdef Q_OS_LINUX
+QStringList PluginWorker::injectorBinaries()
+{
+    QStringList found;
+    for (const char *suffix : {"_x86", "_x64"}) {
+        const QString path = pluginsDir() + "/bin/at-injector" + suffix;
+        if (QFileInfo::exists(path))
+            found << path;
+    }
+    return found;
+}
+
+PluginWorker::PtraceStatus PluginWorker::ptraceStatus()
+{
+    const QStringList binaries = injectorBinaries();
+    if (binaries.isEmpty())
+        return PtraceStatus::Unavailable;
+
+    for (const QString &path : binaries) {
+        if (!hasCapability(CAP_SYS_PTRACE, path))
+            return PtraceStatus::Missing;
+    }
+    return PtraceStatus::Granted;
+}
+
+QString PluginWorker::grantPtrace()
+{
+    const QStringList binaries = injectorBinaries();
+    if (binaries.isEmpty())
+        return tr("at-injector binaries not found");
+
+    const QStringList searchDirs = { QStringLiteral("/usr/sbin"), QStringLiteral("/sbin"),
+                                     QStringLiteral("/usr/bin"), QStringLiteral("/bin") };
+
+    QString setcap = QStandardPaths::findExecutable(QStringLiteral("setcap"));
+    if (setcap.isEmpty())
+        setcap = QStandardPaths::findExecutable(QStringLiteral("setcap"), searchDirs);
+
+    if (setcap.isEmpty())
+        return tr("setcap not found. Install the libcap package.");
+
+    QProcess process;
+    process.setProgram(QStringLiteral("pkexec"));
+    QStringList arguments{ setcap };
+    for (const QString &path : binaries)
+        arguments << QStringLiteral("cap_sys_ptrace+ep") << path;
+
+    process.setArguments(arguments);
+
+    QEventLoop loop;
+    QObject::connect(&process, &QProcess::finished, &loop, &QEventLoop::quit);
+    QObject::connect(&process, &QProcess::errorOccurred, &loop, &QEventLoop::quit);
+    process.start();
+
+    if (process.state() != QProcess::NotRunning)
+        loop.exec();
+
+    if (process.error() == QProcess::FailedToStart)
+        return tr("pkexec could not be started");
+    
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        const QString err = QString::fromLocal8Bit(process.readAllStandardError()).trimmed();
+        return err.isEmpty() ? tr("Authorization was cancelled or failed") : err;
+    }
+
+    if (ptraceStatus() != PtraceStatus::Granted)
+        return tr("The capability was not applied. The file system may not support it.");
+    
+    return QString();
 }
 #endif
 

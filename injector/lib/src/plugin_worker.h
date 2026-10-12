@@ -47,6 +47,12 @@ public:
     void setConfig(const QString &json);
     void stop();
 
+#ifdef Q_OS_LINUX
+    enum class PtraceStatus { Unavailable, Missing, Granted };
+    static PtraceStatus ptraceStatus();
+    static QString grantPtrace();
+#endif
+
 signals:
     void workerMessage(const QString &msg);
     void currentOutput(const QString &source, const QString &out);
@@ -66,7 +72,10 @@ private:
     void handlePipeMessage(const IpcPipe::Message& msg);
     void cleanupAndUnload();
 
-    QString pluginsDir() const;
+    static QString pluginsDir();
+#ifdef Q_OS_LINUX
+    static QStringList injectorBinaries();
+#endif
 #ifdef Q_OS_LINUX
     void persistLibraryHandle();
     void clearPersistedHandle();
@@ -89,7 +98,7 @@ private:
     arch get_process_arch(const m_pid_t &pid);
 
 #ifdef Q_OS_LINUX
-    bool hasCapability(cap_value_t cap, const QString &programPath);
+    static bool hasCapability(cap_value_t cap, const QString &programPath);
 #endif
     void startInjectorProcess(const QString &command, const m_pid_t &pid, const QString &libPath, arch processArch);
     void parseLibraryHandle(QProcess* process);
