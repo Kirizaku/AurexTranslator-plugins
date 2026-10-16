@@ -28,6 +28,7 @@ SOFTWARE.
 
 #include <atomic>
 #include <cstring>
+#include <new>
 
 #if defined(_WIN32)
     #include <windows.h>
