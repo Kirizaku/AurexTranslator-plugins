@@ -1,0 +1,218 @@
+{
+    "output": {
+        "disable_screencast": true,
+        "framerate_index": 2,
+        "original_screencast_output": true,
+        "processed_screencast_output": true,
+        "processing": {
+            "adaptive_method": 0,
+            "blur_type": 0,
+            "blur_value": 21,
+            "is_adaptive_thresholding": false,
+            "is_blur": false,
+            "is_blurNormalize": true,
+            "is_blurSubtract": true,
+            "is_otsu_binarization": false,
+            "is_simple_thresholding": true,
+            "simple_threshold_type": 0,
+            "threshold_value": 185
+        }
+    },
+    "output_window": {
+        "font": "Adwaita Sans",
+        "font_size": 12,
+        "hook_targets": {
+            "libat-kirikiri|ATRI-MyDearMome": {
+                "sources": [
+                    "Hook:0x00C2D968:v3",
+                    "Hook:0x00C2D600:v3"
+                ]
+            },
+            "libat-kirikiri|TricolourLovest": {
+                "sources": [
+                    "Hook:0x0052C3A7-0x1C:v2",
+                    "Hook:0x0052C3A7-0x19:v2"
+                ]
+            },
+            "libat-kirikiri|TricolourLovestory_chs.exe": {
+                "sources": [
+                    "Hook:0x0052C3A7-0x16:v2"
+                ]
+            },
+            "libat-kirikiri|TricolourLovestory_en.exe": {
+                "sources": [
+                    "Hook:0x0052C3A7-0x1C:v2"
+                ]
+            },
+            "libat-kirikiri|requiem.exe": {
+                "sources": [
+                    "Hook:0x0052C3A7-0x16:v2",
+                    "Hook:0x0052C3A7-0x1F:v2",
+                    "Hook:0x0052C3A7-0x1B:v2",
+                    "Hook:0x0052C3A7-0x32:v2"
+                ]
+            }
+        },
+        "is_show_original_text": true,
+        "is_show_source_name": true,
+        "is_show_translator_name": true,
+        "margin_bottom": 9,
+        "margin_left": 9,
+        "margin_right": 9,
+        "margin_top": 9,
+        "opacity": 255,
+        "text_alignment": 0,
+        "text_color": "#ffffff"
+    },
+    "plugin_flush_ms": {
+        "libat-kirikiri|TricolourLovest": 500,
+        "libat-kirikiri|TricolourLovestory_chs": 500,
+        "libat-kirikiri|TricolourLovestory_en": 500,
+        "libat-kirikiri|requiem.exe": 500
+    },
+    "text_processing": {
+        "hook": {
+            "current_engine_plugin": "libat-kirikiri",
+            "current_engine_process": "",
+            "current_game_app_plugin": "",
+            "hook_mode": 1,
+            "is_hook": true
+        },
+        "is_clipboard": false,
+        "is_ocr": false,
+        "ollama_vision": {
+            "delay": 10,
+            "is_vision": false,
+            "mode": 1,
+            "prompt": ""
+        },
+        "rules_scope": [
+            "libat-kirikiri|ATRI-MyDearMome",
+            "libat-kirikiri|TricolourLovest",
+            "libat-kirikiri|TricolourLovestory_chs.exe",
+            "libat-kirikiri|TricolourLovestory_en.exe",
+            "libat-kirikiri|requiem.exe"
+        ],
+        "tesseract": {
+            "delay": 1,
+            "is_systemdata": false,
+            "is_tesseract": true,
+            "lang": "",
+            "mode": 0,
+            "path_tessdata": "./tessdata"
+        },
+        "text_replacement_table": [
+            {
+                "from": "(^|\\s)\\S",
+                "regex": true,
+                "source": "Hook:0x0052C3A7-0x16:v2",
+                "target": "libat-kirikiri|requiem.exe",
+                "to": "\\1"
+            },
+            {
+                "from": "([.!?…])([A-Za-z])(?!\\2)",
+                "regex": true,
+                "source": "Hook:0x0052C3A7-0x16:v2",
+                "target": "libat-kirikiri|requiem.exe",
+                "to": "\\1 "
+            },
+            {
+                "from": "(.)(\\1+)",
+                "regex": true,
+                "source": "Hook:0x0052C3A7-0x16:v2",
+                "target": "libat-kirikiri|requiem.exe",
+                "to": "\\2"
+            },
+            {
+                "from": "(^|\\s)\\S",
+                "regex": true,
+                "source": "Hook:0x0052C3A7-0x1F:v2",
+                "target": "libat-kirikiri|requiem.exe",
+                "to": "\\1"
+            },
+            {
+                "from": "([.!?…])([A-Za-z])(?!\\2)",
+                "regex": true,
+                "source": "Hook:0x0052C3A7-0x1F:v2",
+                "target": "libat-kirikiri|requiem.exe",
+                "to": "\\1 "
+            },
+            {
+                "from": "(.)(\\1+)",
+                "regex": true,
+                "source": "Hook:0x0052C3A7-0x1F:v2",
+                "target": "libat-kirikiri|requiem.exe",
+                "to": "\\2"
+            },
+            {
+                "from": "^(?:.[  ]+){2,}",
+                "regex": true,
+                "source": "Hook:0x0052C3A7-0x32:v2",
+                "target": "libat-kirikiri|requiem.exe",
+                "to": " "
+            },
+            {
+                "from": "^(?:(.)\\1+)+",
+                "regex": true,
+                "source": "Hook:0x00C2D968:v3",
+                "target": "libat-kirikiri|ATRI-MyDearMome",
+                "to": ""
+            },
+            {
+                "from": "^(?:(.)\\1+)+",
+                "regex": true,
+                "source": "Hook:0x00C2D600:v3",
+                "target": "libat-kirikiri|ATRI-MyDearMome",
+                "to": ""
+            },
+            {
+                "from": "(.)\\1",
+                "regex": true,
+                "source": "Hook:0x0052C3A7-0x1C:v2",
+                "target": "libat-kirikiri|TricolourLovest",
+                "to": "\\1"
+            },
+            {
+                "from": "(.)\\1",
+                "regex": true,
+                "source": "Hook:0x0052C3A7-0x19:v2",
+                "target": "libat-kirikiri|TricolourLovest",
+                "to": "\\1"
+            },
+            {
+                "from": "(.)\\1",
+                "regex": true,
+                "source": "Hook:0x0052C3A7-0x1C:v2",
+                "target": "libat-kirikiri|TricolourLovestory_en.exe",
+                "to": "\\1"
+            },
+            {
+                "from": "(.)\\1",
+                "regex": true,
+                "source": "Hook:0x0052C3A7-0x16:v2",
+                "target": "libat-kirikiri|TricolourLovestory_chs.exe",
+                "to": "\\1"
+            }
+        ]
+    },
+    "translator": {
+        "translator_offline": {
+            "ollama": {
+                "current_model": "",
+                "is_ollama_translator": true,
+                "models": [
+                ],
+                "translation_prompt": "",
+                "url": "http://localhost:11434/",
+                "wait_for_responce": true
+            }
+        },
+        "translator_online": {
+            "google": {
+                "google_source_lang": "",
+                "google_target_lang": "",
+                "is_google": false
+            }
+        }
+    }
+}
