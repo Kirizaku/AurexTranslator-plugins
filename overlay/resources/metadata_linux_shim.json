@@ -1,0 +1,13 @@
+{
+    "name": "libat-overlay",
+    "version": "1.0.0",
+    "minAppVersion": "0.0.9",
+    "dependencies": [],
+    "description": "In-game overlay launcher: enables the overlay in games started through it",
+    "type": "overlay",
+    "category": "engine",
+    "target": {
+        "title": "In-game overlay (LD_PRELOAD shim)",
+        "executable": ""
+    }
+}

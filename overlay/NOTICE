@@ -1,0 +1,51 @@
+=============================================================================
+                                at-overlay
+=============================================================================
+
+License: GPL-2.0-or-later. See LICENSE for the full text.
+
+This project incorporates code from three upstream projects. Each file we
+modified carries a header naming its specific origin and what changed;
+this file is just a short index. MIT and zlib are permissive and
+compatible with GPL-2.0-or-later; their copyright notices are given
+below, and the full license texts ship with binary releases.
+
+
+  - obs-vkcapture — GPL-2.0-or-later
+    https://github.com/nowrep/obs-vkcapture
+    Copyright (C) 2021 David Rosca <nowrep@gmail.com>
+    Linux capture path: src/linux/vklayer.c/.h, src/linux/capture.c,
+    src/linux/backends/glinject.c/.h, src/linux/inject/dlsym.c/.h,
+    src/linux/inject/elfhacks.c/.h, src/common/utils.h,
+    ../include/host/overlay_protocol.h, src/windows/win_capture.cpp/.h, and
+    parts of cmake/overlay_linux.cmake.
+
+  - obs-studio — GPL-2.0-or-later
+    https://github.com/obsproject/obs-studio
+    Original author: Lain Bailey (see the project's AUTHORS file)
+    Windows capture path: src/windows/backends/ follows the file and
+    function organisation of obs-studio/plugins/win-capture/graphics-hook.
+
+  - MangoHud — MIT License
+    https://github.com/flightlessmango/MangoHud
+    Copyright (c) 2020 flightlessmango
+    LD_PRELOAD shim and musl support: src/linux/inject/shim.cpp,
+    src/linux/inject/elfhacks.c (eh_dyn_addr()).
+
+
+Bundled / required third-party code
+------------------------------------------------------------------------
+
+  - Dear ImGui by Omar Cornut and contributors — MIT license.
+    Bundled in third_party/imgui (see third_party/imgui/LICENSE.txt).
+
+  - Microsoft Detours — MIT license. https://github.com/microsoft/Detours
+    Windows builds only, installed via vcpkg (static-CRT triplet, see
+    cmake/overlay_windows.cmake); not bundled in this repository.
+
+  - elfhacks 0.4.1 by Pyry Haulos (2007-2008) — zlib-style license (see the
+    notice at the top of src/linux/inject/elfhacks.h). Carried by
+    obs-vkcapture and bundled here as src/linux/inject/elfhacks.c/.h.
+
+
+For exactly what changed in each file, see that file's own header comment.

@@ -40,6 +40,17 @@
 #ifdef Q_OS_WINDOWS
 #include <Windows.h>
 #include <tlhelp32.h>
+
+static bool process_ever_vk_chained(DWORD pid)
+{
+    char name[64];
+    std::snprintf(name, sizeof(name), "Local\\at_overlay_vk_active_%lu", (unsigned long)pid);
+    HANDLE h = OpenEventA(SYNCHRONIZE, FALSE, name);
+    if (!h) return false;
+    const bool signaled = (WaitForSingleObject(h, 0) == WAIT_OBJECT_0);
+    CloseHandle(h);
+    return signaled;
+}
 #endif
 
 static QString sanitizeSource(QString name)
@@ -71,6 +82,17 @@ PluginWorker::PluginWorker(const QStringList &args, QObject *parent)
     m_streamsCharacters = (args.size() > 3 && args.at(3) == QLatin1String("per_char"));
 }
 
+bool PluginWorker::isOverlay() const
+{
+    return m_pluginName == QLatin1String("libat-overlay");
+}
+
+void PluginWorker::emitMessage(const QString &text)
+{
+    const QString prefix = isOverlay() ? QStringLiteral("[Overlay] ") : QStringLiteral("[Hook] ");
+    emit workerMessage(m_pluginName, prefix + text);
+}
+
 void PluginWorker::setConfig(const QString &json)
 {
     QMutexLocker lk(&m_pipeMutex);
@@ -98,7 +120,7 @@ void PluginWorker::run()
     }
 
     m_processFound = false;
-    emit workerMessage(tr("[Hook] Searching for process: %1").arg(m_processName));
+    emitMessage(tr("Searching for process: %1").arg(m_processName));
 
     m_pid_t pid = 0;
 
@@ -106,6 +128,12 @@ void PluginWorker::run()
         pid = get_pid(m_processName);
         handleProcessState(pid);
         QThread::msleep(100);
+    }
+
+    if (m_pid > 0 && m_libraryHandle) {
+        QMutexLocker lk(&m_injectionMutex);
+        if (!m_injectionSettled)
+            m_injectionCondition.wait(&m_injectionMutex, 5000);
     }
 
     {
@@ -155,10 +183,11 @@ void PluginWorker::onProcessFound(m_pid_t pid)
 {
     m_processFound = true;
     m_pid = pid;
+    emit processFound(m_pluginName, m_processName);
 
     m_processArch = get_process_arch(pid);
     if (m_processArch == arch::Unknown) {
-        emit workerMessage(tr("[Hook] Unknown architecture for process: %1").arg(m_processName));
+        emitMessage(tr("Unknown architecture for process: %1").arg(m_processName));
         stop();
         return;
     }
@@ -169,7 +198,7 @@ void PluginWorker::onProcessFound(m_pid_t pid)
 
     const QString libPath = m_archPaths.value(archStr);
     if (libPath.isEmpty()) {
-        emit workerMessage(tr("[Hook] No library found for %1").arg(m_pluginName));
+        emitMessage(tr("No library found for %1").arg(m_pluginName));
         stop();
         return;
     }
@@ -177,35 +206,53 @@ void PluginWorker::onProcessFound(m_pid_t pid)
     uintptr_t module = get_module(pid, libFileName);
 
     if (module != 0) {
-        void* handle = nullptr;
 #if defined(Q_OS_WINDOWS)
-        handle = reinterpret_cast<void*>(module);
-#else
-        handle = persistedHandleFor(pid);
-        if (!handle) {
-            emit workerMessage(tr("[Hook] Library already loaded in \"%1\" but its handle is "
-                                  "unknown; cannot unload cleanly. Please close the game and "
-                                  "start the hook again").arg(m_processName));
-            stop();
+        if (isOverlay()) {
+            emitMessage(tr("Library already loaded in \"%1\" (attaching to an "
+                                  "already-running process).").arg(m_processName));
+            m_libraryHandle = reinterpret_cast<void*>(module);
+            {
+                QMutexLocker lk(&m_injectionMutex);
+                m_injectionSettled = true;
+            }
+            m_injectionCondition.wakeAll();
+            std::string pipeName = "AurexTranslator_" + m_pluginName.toStdString()
+                                  + "_" + m_processName.toStdString();
+            startPipeServer(pipeName);
             return;
         }
 #endif
+        {
+            void* handle = nullptr;
+#if defined(Q_OS_WINDOWS)
+            handle = reinterpret_cast<void*>(module);
+#else
+            handle = persistedHandleFor(pid);
+            if (!handle) {
+                emitMessage(tr("Library already loaded in \"%1\" but its handle is "
+                                      "unknown; cannot unload cleanly. Please close the game and "
+                                      "start again").arg(m_processName));
+                stop();
+                return;
+            }
+#endif
 
-        emit workerMessage(tr("[Hook] Stale library found in \"%1\". Reinjecting...").arg(m_processName));
-        m_libraryHandle = handle;
-        startInjectorProcess(QStringLiteral("unload"), pid, QString(), m_processArch);
-        m_libraryHandle = nullptr;
+            emitMessage(tr("Stale library found in \"%1\". Reinjecting...").arg(m_processName));
+            m_libraryHandle = handle;
+            startInjectorProcess(QStringLiteral("unload"), pid, QString(), m_processArch);
+            m_libraryHandle = nullptr;
 
-        if (!m_running) return; // unload failed and triggered stop()
+            if (!m_running) return; // unload failed and triggered stop()
 
 #ifdef Q_OS_LINUX
-        clearPersistedHandle();
+            clearPersistedHandle();
 #endif
+        }
         module = 0;
     }
 
     if (module == 0) {
-        emit workerMessage(tr("[Hook] Process \"%1\" found (PID: %2). Injecting...").arg(m_processName).arg(pid));
+        emitMessage(tr("Process \"%1\" found (PID: %2). Injecting...").arg(m_processName).arg(pid));
 
         constexpr int STABLE_CHECKS = 10;
         constexpr int CHECK_INTERVAL = 50;
@@ -217,14 +264,14 @@ void PluginWorker::onProcessFound(m_pid_t pid)
             const m_pid_t currentPid = get_pid(m_processName);
 
             if (currentPid <= 0) {
-                emit workerMessage(tr("[Hook] Process disappeared, waiting..."));
+                emitMessage(tr("Process disappeared, waiting..."));
                 stableCount = 0;
                 lastPid = 0;
                 continue;
             }
 
             if (currentPid != lastPid) {
-                emit workerMessage(tr("[Hook] Process restarted (PID: %1 → %2), waiting...")
+                emitMessage(tr("Process restarted (PID: %1 → %2), waiting...")
                     .arg(lastPid).arg(currentPid));
                 lastPid = currentPid;
                 stableCount = 0;
@@ -238,31 +285,41 @@ void PluginWorker::onProcessFound(m_pid_t pid)
 
         if (lastPid != pid) {
             m_pid = lastPid;
-            emit workerMessage(tr("[Hook] Process stable (PID: %1)").arg(m_pid));
+            emitMessage(tr("Process stable (PID: %1)").arg(m_pid));
         }
 
-        m_waitingConfirmation = true;
-        m_confirmed = false;
-        emit confirmationRequired(tr("Inject into \"%1\" (PID: %2)?").arg(m_processName).arg(m_pid));
+        if (isOverlay()) {
+            m_confirmed = true;
+        } else {
+            m_waitingConfirmation = true;
+            m_confirmed = false;
+            emit confirmationRequired(tr("Inject into \"%1\" (PID: %2)?").arg(m_processName).arg(m_pid));
 
-        m_confirmMutex.lock();
-        m_confirmCondition.wait(&m_confirmMutex);
-        m_confirmMutex.unlock();
+            m_confirmMutex.lock();
+            m_confirmCondition.wait(&m_confirmMutex);
+            m_confirmMutex.unlock();
 
-        if (!m_running) return;
+            if (!m_running) return;
+        }
 
         if (!m_confirmed) {
-            emit workerMessage(tr("[Hook] Injection cancelled by user"));
+            emitMessage(tr("Injection cancelled by user"));
             stop();
             return;
         }
 
         QThread::msleep(1000);
-        emit workerMessage(tr("[Hook] Injecting into \"%1\" (PID: %2)...").arg(m_processName).arg(m_pid));
-        const std::string pipeName = "AurexTranslator_" + m_pluginName.toStdString();
+        emitMessage(tr("Injecting into \"%1\" (PID: %2)...").arg(m_processName).arg(m_pid));
+        std::string pipeName = "AurexTranslator_" + m_pluginName.toStdString();
+        if (isOverlay())
+            pipeName += "_" + m_processName.toStdString();
         startPipeServer(pipeName);
 
         writeSettingsFile();
+        {
+            QMutexLocker lk(&m_injectionMutex);
+            m_injectionSettled = false;
+        }
         startInjectorProcess("load", m_pid, libPath, m_processArch);
     }
 }
@@ -284,12 +341,18 @@ void PluginWorker::onProcessLost()
     m_libraryHandle = nullptr;
     m_pid = 0;
 
-    emit processLost();
-    emit workerMessage(tr("[Hook] Searching for process: %1").arg(m_processName));
+    emit processLost(m_pluginName, m_processName);
+    emitMessage(tr("Searching for process: %1").arg(m_processName));
 }
 
 void PluginWorker::startPipeServer(const std::string& pipeName)
 {
+    {
+        QMutexLocker lk(&m_pipeMutex);
+        if (m_pipe) m_pipe->close();
+    }
+    if (m_pipeThread.joinable()) m_pipeThread.join();
+
     {
         QMutexLocker lk(&m_pipeMutex);
         m_pipe = std::make_unique<IpcPipe>(pipeName, true);
@@ -314,12 +377,21 @@ void PluginWorker::handlePipeMessage(const IpcPipe::Message& msg)
 {
     switch (msg.type) {
     case MsgType::Status:
+        {
+            QMutexLocker lk(&m_injectionMutex);
+            m_injectionSettled = true;
+        }
+        m_injectionCondition.wakeAll();
+
         switch (msg.status_code) {
-        case StatusCode::Success:
-            emit workerMessage(tr("[Hook] Injection succeeded (PID: %1). Awaiting text from game...").arg(m_pid));
+        case StatusCode::Success: {
+            emitMessage(isOverlay()
+                ? tr("Injection succeeded (PID: %1).").arg(m_pid)
+                : tr("Injection succeeded (PID: %1). Awaiting text from game...").arg(m_pid));
             break;
+        }
         case StatusCode::Failure:
-            emit workerMessage(tr("[Hook] Error (PID: %1): %2").arg(m_pid).arg(QString::fromStdString(msg.text)));
+            emitMessage(tr("Error (PID: %1): %2").arg(m_pid).arg(QString::fromStdString(msg.text)));
             stop();
             break;
         }
@@ -352,14 +424,19 @@ void PluginWorker::handlePipeMessage(const IpcPipe::Message& msg)
         break;
     }
     case MsgType::Info:
-        emit workerMessage(QString("[Hook] %1").arg(QString::fromStdString(msg.text)));
+        emitMessage(QString::fromStdString(msg.text));
         break;
     }
 }
 
 void PluginWorker::cleanupAndUnload()
 {
-    if (m_pid > 0 && m_libraryHandle) {
+#ifdef Q_OS_WIN
+    const bool skipUnload = (isOverlay()) && process_ever_vk_chained(m_pid);
+#else
+    const bool skipUnload = false;
+#endif
+    if (m_pid > 0 && m_libraryHandle && !skipUnload) {
         startInjectorProcess("unload", m_pid, QString(), m_processArch);
     }
 #ifdef Q_OS_LINUX
@@ -770,7 +847,7 @@ void PluginWorker::startInjectorProcess(const QString &command, const m_pid_t &p
                 parseLibraryHandle(process);
             }
         } else {
-            QString errMsg = QString("[Hook] Command \"%1\" failed (code %2, %3)")
+            QString errMsg = QString("Command \"%1\" failed (code %2, %3)")
                 .arg(command)
                 .arg(exitCode)
                 .arg(status == QProcess::CrashExit ? QString("crashed")
@@ -780,7 +857,7 @@ void PluginWorker::startInjectorProcess(const QString &command, const m_pid_t &p
             if (!stdErr.isEmpty())
                 errMsg += "\n" + QString::fromLocal8Bit(stdErr);
 
-            emit workerMessage(errMsg);
+            emitMessage(errMsg);
             stop();
         }
         process->deleteLater();
@@ -830,7 +907,7 @@ void PluginWorker::parseLibraryHandle(QProcess* process)
     int idx = output.indexOf(marker);
 
     if (idx == -1) {
-        emit workerMessage(tr("[Hook] Failed to find handle marker in output"));
+        emitMessage(tr("Failed to find handle marker in output"));
         return;
     }
 
@@ -843,7 +920,7 @@ void PluginWorker::parseLibraryHandle(QProcess* process)
     qulonglong addr = hexStr.toULongLong(&ok, 16);
 
     if (!ok) {
-        emit workerMessage(tr("[Hook] Failed to parse address: %1").arg(hexStr));
+        emitMessage(tr("Failed to parse address: %1").arg(hexStr));
         return;
     }
 

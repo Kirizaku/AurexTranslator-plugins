@@ -1,0 +1,13 @@
+{
+    "name": "libat-overlay-vulkan",
+    "version": "1.0.0",
+    "minAppVersion": "0.0.9",
+    "dependencies": [],
+    "description": "In-game overlay for Vulkan games: shows translated text and captures the image for OCR",
+    "type": "overlay",
+    "category": "engine",
+    "target": {
+        "title": "In-game overlay (Vulkan)",
+        "executable": ""
+    }
+}

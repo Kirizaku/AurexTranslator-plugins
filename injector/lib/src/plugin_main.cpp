@@ -22,6 +22,15 @@
 
 At_injector::At_injector() : m_translator(new QTranslator(this)) {}
 
+At_injector::~At_injector()
+{
+    const QStringList keys = m_sessions.keys();
+    for (const QString &key : keys)
+        beginStop(key);
+    
+    waitStopped();
+}
+
 void At_injector::setLanguage(const QString &languageCode)
 {
     const QString translationPath = ":/i18n/libat-injector_" + languageCode;
@@ -31,20 +40,37 @@ void At_injector::setLanguage(const QString &languageCode)
     }
 }
 
+QString At_injector::sessionKey(const QString &pluginName, const QString &processName)
+{
+    return pluginName + QStringLiteral("|") + processName;
+}
+
 QString At_injector::execute(const QString &command, const QStringList &args)
 {
     if (command == "start") {
-        if (m_worker && m_thread)
+        if (args.size() < 2) return "Unknown command";
+        const QString processName = args.at(0);
+        const QString pluginName = args.at(1);
+        const QString key = sessionKey(pluginName, processName);
+
+        if (m_sessions.contains(key))
             return QString();
 
-        m_worker = new PluginWorker(args);
-        m_thread = new QThread;
-        m_worker->moveToThread(m_thread);
+        if (m_stopping.contains(key)) {
+            m_pendingStarts.insert(key, args);
+            return QString();
+        }
 
-        connect(m_worker, &PluginWorker::workerMessage, this, &PluginInterface::pluginMessage);
-        connect(m_worker, &PluginWorker::currentOutput, this, &PluginInterface::currentOutput);
-        connect(m_worker, &PluginWorker::processLost, this, &PluginInterface::processLost);
-        connect(m_worker, &PluginWorker::confirmationRequired, this, [=](const QString& message) {
+        Session session;
+        session.worker = new PluginWorker(args);
+        session.thread = new QThread;
+        session.worker->moveToThread(session.thread);
+
+        connect(session.worker, &PluginWorker::workerMessage, this, &PluginInterface::pluginMessage);
+        connect(session.worker, &PluginWorker::currentOutput, this, &PluginInterface::currentOutput);
+        connect(session.worker, &PluginWorker::processFound, this, &PluginInterface::processFound);
+        connect(session.worker, &PluginWorker::processLost, this, &PluginInterface::processLost);
+        connect(session.worker, &PluginWorker::confirmationRequired, this, [worker = QPointer<PluginWorker>(session.worker)](const QString& message) {
             QMessageBox msgBox(nullptr);
             msgBox.setWindowTitle(tr("Injection confirmation"));
             msgBox.setText(message);
@@ -56,22 +82,37 @@ QString At_injector::execute(const QString &command, const QStringList &args)
             msgBox.activateWindow();
 
             const bool confirmed = msgBox.exec() == QMessageBox::Yes;
-            m_worker->onConfirmationResult(confirmed);
+            if (worker)
+                worker->onConfirmationResult(confirmed);
             }, Qt::QueuedConnection);
 
-        connect(m_thread, &QThread::started, m_worker, &PluginWorker::run);
+        connect(session.thread, &QThread::started, session.worker, &PluginWorker::run);
 
-        m_thread->start();
+        m_sessions.insert(key, session);
+        session.thread->start();
 
         return QString();
     }
     else if (command == "stop") {
-        if (m_worker) {
-            m_worker->stop();
+        if (args.isEmpty()) return "Unknown command";
+        const QString pluginName = args.at(0);
 
-            cleanupWorker();
+        if (args.size() >= 2) {
+            beginStop(sessionKey(pluginName, args.at(1)));
             return QString();
         }
+
+        const QString prefix = pluginName + QStringLiteral("|");
+        const QStringList keys = m_sessions.keys() + m_pendingStarts.keys();
+        for (const QString &key : keys) {
+            if (key.startsWith(prefix))
+                beginStop(key);
+        }
+        return QString();
+    }
+    else if (command == "wait-stopped") {
+        waitStopped();
+        return QString();
     }
 #ifdef Q_OS_LINUX
     else if (command == "ptrace-status") {
@@ -87,19 +128,79 @@ QString At_injector::execute(const QString &command, const QStringList &args)
     }
 #endif
     else if (command == "config") {
-        if (m_worker && args.size() >= 2)
-            m_worker->setConfig(args.at(1));
+        if (args.size() >= 2) {
+            const QString prefix = args.at(0) + QStringLiteral("|");
+            const QStringList keys = m_sessions.keys();
+            for (const QString &key : keys) {
+                if (key.startsWith(prefix))
+                    m_sessions.value(key).worker->setConfig(args.at(1));
+            }
+            const QStringList pendingKeys = m_pendingStarts.keys();
+            for (const QString &key : pendingKeys) {
+                if (key.startsWith(prefix))
+                    m_pendingConfigs.insert(key, args.at(1));
+            }
+        }
         return QString();
     }
 
     return "Unknown command";
 }
 
-void At_injector::cleanupWorker()
+void At_injector::beginStop(const QString &key)
 {
-    m_thread->quit();
-    m_thread->wait();
+    m_pendingStarts.remove(key);
+    m_pendingConfigs.remove(key);
 
-    delete m_worker; m_worker = nullptr;
-    delete m_thread; m_thread = nullptr;
+    auto it = m_sessions.find(key);
+    if (it == m_sessions.end()) return;
+
+    Session session = it.value();
+    m_sessions.erase(it);
+    m_stopping.insert(key, session);
+
+    session.worker->stop();
+    connect(session.thread, &QThread::finished, this, [this, key, thread = session.thread] {
+        const auto stopping = m_stopping.constFind(key);
+        if (stopping != m_stopping.constEnd() && stopping->thread == thread)
+            finishStop(key);
+    });
+    session.thread->quit();
+}
+
+void At_injector::finishStop(const QString &key)
+{
+    auto it = m_stopping.find(key);
+    if (it == m_stopping.end()) return;
+
+    Session session = it.value();
+    m_stopping.erase(it);
+
+    session.thread->wait();
+    delete session.worker;
+    delete session.thread;
+
+    const auto pending = m_pendingStarts.find(key);
+    if (pending == m_pendingStarts.end()) return;
+
+    const QStringList args = pending.value();
+    m_pendingStarts.erase(pending);
+    const QString config = m_pendingConfigs.take(key);
+
+    execute(QStringLiteral("start"), args);
+    if (!config.isEmpty()) {
+        const auto started = m_sessions.constFind(key);
+        if (started != m_sessions.constEnd())
+            started->worker->setConfig(config);
+    }
+}
+
+void At_injector::waitStopped()
+{
+    m_pendingStarts.clear();
+    m_pendingConfigs.clear();
+
+    const QStringList keys = m_stopping.keys();
+    for (const QString &key : keys)
+        finishStop(key);
 }

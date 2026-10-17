@@ -54,16 +54,20 @@ public:
 #endif
 
 signals:
-    void workerMessage(const QString &msg);
+    void workerMessage(const QString &pluginName, const QString &msg);
     void currentOutput(const QString &source, const QString &out);
-    void processLost();
     void confirmationRequired(const QString& message);
+    void processFound(const QString &pluginName, const QString &processName);
+    void processLost(const QString &pluginName, const QString &processName);
 
 public slots:
     void run();
     void onConfirmationResult(bool confirmed);
 
 private:
+    bool isOverlay() const;
+    void emitMessage(const QString &text);
+
     void handleProcessState(m_pid_t pid);
     void onProcessFound(m_pid_t pid);
     void onProcessLost();
@@ -112,6 +116,10 @@ private:
     void* m_libraryHandle = nullptr;
     bool m_running = true;
     bool m_processFound = false;
+
+    bool m_injectionSettled = false;
+    QMutex m_injectionMutex;
+    QWaitCondition m_injectionCondition;
 
     std::unique_ptr<IpcPipe> m_pipe;
     std::thread              m_pipeThread;

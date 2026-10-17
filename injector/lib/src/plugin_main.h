@@ -33,18 +33,28 @@ class At_injector : public PluginInterface
 
 public:
     At_injector();
+    ~At_injector() override;
 
     void setLanguage(const QString &languageCode) override;
     QString execute(const QString &command, const QStringList &args = QStringList()) override;
 
 private:
-    PluginWorker *m_worker = nullptr;
-    QThread *m_thread = nullptr;
+    struct Session {
+        PluginWorker *worker = nullptr;
+        QThread *thread = nullptr;
+    };
+    QHash<QString, Session> m_sessions;
+    QHash<QString, Session> m_stopping;
+    QHash<QString, QStringList> m_pendingStarts;
+    QHash<QString, QString> m_pendingConfigs;
 
     QTranslator *m_translator = nullptr;
     QString m_currentLanguage;
 
-    void cleanupWorker();
+    static QString sessionKey(const QString &pluginName, const QString &processName);
+    void beginStop(const QString &key);
+    void finishStop(const QString &key);
+    void waitStopped();
 };
 
 #endif //AT_INJECTOR_H

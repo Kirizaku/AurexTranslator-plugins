@@ -1,0 +1,8 @@
+; at-overlay Vulkan implicit layer — exported entry points.
+; Listed here (rather than via __declspec(dllexport)) so the names are exported
+; undecorated on both x64 and x86: VKAPI_CALL is __stdcall on 32-bit, and the
+; Vulkan loader resolves these by their plain, undecorated names.
+EXPORTS
+    vkNegotiateLoaderLayerInterfaceVersion
+    vkGetInstanceProcAddr
+    vkGetDeviceProcAddr

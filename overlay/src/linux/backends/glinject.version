@@ -1,0 +1,5 @@
+{
+    global:
+        at_overlay_resolve_hook;
+    local: *;
+};

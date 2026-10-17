@@ -1,0 +1,15 @@
+{
+    global:
+        dlsym;
+        dlvsym;
+        glXGetProcAddress;
+        glXGetProcAddressARB;
+        glXSwapBuffers;
+        glXSwapBuffersMscOML;
+        glXDestroyContext;
+        glXCreateWindow;
+        eglGetProcAddress;
+        eglSwapBuffers;
+        eglDestroyContext;
+    local: *;
+};

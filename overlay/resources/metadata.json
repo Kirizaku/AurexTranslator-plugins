@@ -1,0 +1,13 @@
+{
+    "name": "libat-overlay",
+    "version": "1.0.0",
+    "minAppVersion": "0.0.9",
+    "dependencies": ["libat-injector"],
+    "description": "In-game overlay: shows translated text over D3D, OpenGL and Vulkan games and captures their image for OCR",
+    "type": "overlay",
+    "category": "engine",
+    "target": {
+        "title": "In-game overlay",
+        "executable": ""
+    }
+}

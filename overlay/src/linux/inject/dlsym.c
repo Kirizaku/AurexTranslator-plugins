@@ -1,0 +1,130 @@
+/******************************************************************************
+    at-overlay - in-game overlay for AurexTranslator
+
+    Copyright (C) 2026 by Daniil Nabiulin
+    Copyright (C) 2021 by David Rosca <nowrep@gmail.com> (obs-vkcapture)
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+******************************************************************************/
+
+/*
+NOTE: Derived from obs-vkcapture/src/dlsym.c.
+Modifications:
+  - The ld-musl fallback in dl_init_funcs() follows MangoHud's
+    src/real_dlsym.c, which searches "*ld-musl-*.so*" after libdl and
+    libc. obs-vkcapture stops at libc and has no musl fallback
+*/
+
+#include "dlsym.h"
+#include "elfhacks.h"
+#include "utils.h"
+
+#include <stdio.h>
+
+static bool dl_seen = false;
+static struct dl_funcs dl_f;
+
+static bool dl_init_funcs()
+{
+    if (dl_seen) {
+        return dl_f.valid;
+    }
+
+    dl_seen = true;
+    dl_f.valid = false;
+
+    eh_obj_t libdl;
+    int ret = eh_find_obj(&libdl, "*libdl.so*");
+    if (ret == 0) {
+        eh_find_sym(&libdl, "dlsym", (void**)&dl_f.dlsym);
+        eh_find_sym(&libdl, "dlvsym", (void**)&dl_f.dlvsym);
+    }
+    eh_destroy_obj(&libdl);
+
+    if (!dl_f.dlsym) {
+        eh_obj_t libc;
+        int ret = eh_find_obj(&libc, "*libc.so*");
+        if (ret == 0) {
+            eh_find_sym(&libc, "dlsym", (void**)&dl_f.dlsym);
+            eh_find_sym(&libc, "dlvsym", (void**)&dl_f.dlvsym);
+        }
+        eh_destroy_obj(&libc);
+    }
+
+    if (!dl_f.dlsym) {
+        eh_obj_t musl;
+        int ret = eh_find_obj(&musl, "*ld-musl*");
+        if (ret == 0) {
+            eh_find_sym(&musl, "dlsym", (void**)&dl_f.dlsym);
+            eh_find_sym(&musl, "dlvsym", (void**)&dl_f.dlvsym);
+        }
+        eh_destroy_obj(&musl);
+    }
+
+    if (!dl_f.dlsym) {
+        hlog("Failed to open libdl.so, libc.so and ld-musl");
+        return false;
+    }
+
+    dl_f.valid = true;
+
+    return true;
+}
+
+#undef GETDLADDR
+
+void *real_dlsym(void *handle, const char *symbol)
+{
+    if (!dl_init_funcs()) {
+        return NULL;
+    }
+    return dl_f.dlsym(handle, symbol);
+}
+
+void *real_dlvsym(void *handle, const char *symbol, const char *version)
+{
+    if (!dl_init_funcs()) {
+        return NULL;
+    }
+    return dl_f.dlvsym(handle, symbol, version);
+}
+
+extern void *obs_vkcapture_glXGetProcAddress(const char *name);
+extern void *obs_vkcapture_eglGetProcAddress(const char *name);
+
+void *dlsym(void *handle, const char *symbol)
+{
+    void *real_func = real_dlsym(handle, symbol);
+    if (!real_func) {
+        return NULL;
+    }
+    void *func = obs_vkcapture_glXGetProcAddress(symbol);
+    if (!func) {
+        func = obs_vkcapture_eglGetProcAddress(symbol);
+    }
+    return func ? func : real_func;
+}
+
+void *dlvsym(void *handle, const char *symbol, const char *version)
+{
+    void *real_func = real_dlvsym(handle, symbol, version);
+    if (!real_func) {
+        return NULL;
+    }
+    void *func = obs_vkcapture_glXGetProcAddress(symbol);
+    if (!func) {
+        func = obs_vkcapture_eglGetProcAddress(symbol);
+    }
+    return func ? func : real_func;
+}

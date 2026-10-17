@@ -110,3 +110,6 @@ The repository provides a template (`example/`) for creating new plugins.
 | **Example plugin** (`example/*`) | MIT | `/example/` |
 | **libat-injector** | GPL-3.0 | `/injector/libat-injector/` |
 | **at-injector** (CLI utility) | MIT | `/injector/bin/` |
+| **libat-overlay** (in-game overlay) | GPL-2.0-or-later, includes code from obs-vkcapture, obs-studio, MangoHud and Dear ImGui (see [`overlay/NOTICE`](overlay/NOTICE)) | `/overlay/` |
+
+Bundled third-party code keeps its own license file next to it: Hacker Disassembler Engine (BSD 2-clause, `include/hook/hde/`), Python 3.10 headers (PSF License, `engines/renpy/src/python/`) and Dear ImGui (MIT, `overlay/third_party/imgui/`). On Linux `libat-injector` also links libcap statically (BSD-3-Clause or GPL-2.0) and Qt dynamically (LGPL-3.0). Binary releases ship the full license texts in `THIRD-PARTY-LICENSES`.
