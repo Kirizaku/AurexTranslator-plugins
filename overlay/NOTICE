@@ -40,8 +40,8 @@ Bundled / required third-party code
     Bundled in third_party/imgui (see third_party/imgui/LICENSE.txt).
 
   - Microsoft Detours — MIT license. https://github.com/microsoft/Detours
-    Windows builds only, installed via vcpkg (static-CRT triplet, see
-    cmake/overlay_windows.cmake); not bundled in this repository.
+    Windows builds only. Bundled unmodified in third_party/detours
+    (upstream commit 9764cebcb1a75940e68fa83d6730ffaf0f669401).
 
   - elfhacks 0.4.1 by Pyry Haulos (2007-2008) — zlib-style license (see the
     notice at the top of src/linux/inject/elfhacks.h). Carried by

@@ -19,22 +19,13 @@ if(NOT EXISTS "${IMGUI_DIR}/imgui.h")
     message(FATAL_ERROR "Dear ImGui not found at ${IMGUI_DIR}")
 endif()
 
-if(NOT CMAKE_TOOLCHAIN_FILE)
-    message(FATAL_ERROR "libat-overlay needs the vcpkg toolchain file (for Detours) - configure with -DCMAKE_TOOLCHAIN_FILE=<vcpkg root>/scripts/buildsystems/vcpkg.cmake")
-endif()
-get_filename_component(AT_OVERLAY_VCPKG_ROOT "${CMAKE_TOOLCHAIN_FILE}" DIRECTORY)
-get_filename_component(AT_OVERLAY_VCPKG_ROOT "${AT_OVERLAY_VCPKG_ROOT}" DIRECTORY)
-get_filename_component(AT_OVERLAY_VCPKG_ROOT "${AT_OVERLAY_VCPKG_ROOT}" DIRECTORY)
-set(AT_OVERLAY_DETOURS_ROOT "${AT_OVERLAY_VCPKG_ROOT}/installed/${AT_OVERLAY_ARCH}-windows-static")
-
-find_path(DETOURS_INCLUDE_DIRS "detours/detours.h"
-          PATHS "${AT_OVERLAY_DETOURS_ROOT}/include" NO_DEFAULT_PATH)
-find_library(DETOURS_LIBRARY detours
-          PATHS "${AT_OVERLAY_DETOURS_ROOT}/lib" NO_DEFAULT_PATH)
-if(NOT DETOURS_INCLUDE_DIRS OR NOT DETOURS_LIBRARY)
-    message(FATAL_ERROR "Microsoft Detours (static CRT) not found under ${AT_OVERLAY_DETOURS_ROOT} - run: "
-                        "vcpkg install detours:${AT_OVERLAY_ARCH}-windows-static")
-endif()
+set(DETOURS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/detours")
+add_library(at_detours STATIC
+    ${DETOURS_DIR}/detours.cpp
+    ${DETOURS_DIR}/modules.cpp
+    ${DETOURS_DIR}/disasm.cpp
+)
+target_include_directories(at_detours PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
 add_library(at_overlay_imgui_dx STATIC
     ${IMGUI_DIR}/imgui.cpp
@@ -89,10 +80,9 @@ target_include_directories(libat-overlay PRIVATE
     ${AT_OVERLAY_WIN}/backends
     ${AT_OVERLAY_WIN}/layer
     ${AT_PLUGINS_INCLUDE}
-    ${DETOURS_INCLUDE_DIRS}
 )
 target_link_libraries(libat-overlay PRIVATE
-    ${DETOURS_LIBRARY} at_overlay_imgui_dx
+    at_detours at_overlay_imgui_dx
     d3d9 d3d10 d3d11 d3d12 dxgi dxguid opengl32
 )
 set_target_properties(libat-overlay PROPERTIES
@@ -101,8 +91,6 @@ set_target_properties(libat-overlay PROPERTIES
     OUTPUT_NAME "libat-overlay_${AT_OVERLAY_ARCH}"
     PREFIX ""
 )
-
-set(AT_OVERLAY_TARGETS libat-overlay at_overlay_imgui_dx)
 
 if(AT_OVERLAY_HAVE_VULKAN)
     target_sources(libat-overlay PRIVATE
@@ -113,12 +101,4 @@ if(AT_OVERLAY_HAVE_VULKAN)
     )
     target_compile_definitions(libat-overlay PRIVATE _CRT_SECURE_NO_WARNINGS)
     target_link_libraries(libat-overlay PRIVATE at_overlay_imgui_vk)
-    list(APPEND AT_OVERLAY_TARGETS at_overlay_imgui_vk)
-endif()
-
-if(MSVC)
-    foreach(t ${AT_OVERLAY_TARGETS})
-        set_property(TARGET ${t} PROPERTY
-            MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    endforeach()
 endif()
