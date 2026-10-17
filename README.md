@@ -15,12 +15,13 @@ aurextranslator-plugins/
 │ ├── 📁 renpy/    # Ren'Py visual novel engine
 │ ├── 📁 kirikiri/ # KiriKiri / KiriKiriZ visual novel engine
 │ └── 📁 unity/    # Unity games (Mono and IL2CPP)
+├── 📁 overlay/    # libat-overlay: in-game overlay (translated text over the game, frame capture)
 ```
 
 
 ## 🧩 Architecture & How It Works
 
-The system consists of three key components that exchange data via a **named-pipe/socket protocol**:
+The system consists of four key components that exchange data via a **named-pipe/socket protocol**:
 
 ### 1. Game/Engine Plugins (`games/*`, `engines/*`)
 - Dynamic libraries written for specific games or game engines
@@ -30,7 +31,13 @@ The system consists of three key components that exchange data via a **named-pip
 - `libat-injector` — wrapper library that manages `at-injector`: launches it with the required parameters and organizes data exchange via a named-pipe/socket IPC
 - `at-injector` (in `bin/`) — CLI utility for loading (`load`) or unloading (`unload`) libraries into the address space of a running process. Available for x86 and x64.
 
-### 3. Aurex Translator
+### 3. In-game Overlay (`overlay/`)
+- `libat-overlay` — draws the translated text over the game and sends the game image back to Aurex Translator for OCR
+- Windows: one DLL, loaded into the game by `libat-injector`, that hooks Direct3D 9/10/11/12 and OpenGL and is also registered as a Vulkan layer
+- Linux: a Vulkan layer and an OpenGL `LD_PRELOAD` shim, both enabled by a launcher script that Aurex Translator creates
+- Talks to the application over its own named-pipe/socket protocol (`include/host/overlay_protocol.h`)
+
+### 4. Aurex Translator
 - Main application that receives text from plugins, translates it using the selected service, and displays it in a separate window
 
 ## 📦 Building All Plugins
@@ -38,6 +45,8 @@ The system consists of three key components that exchange data via a **named-pip
 ### Requirements
 - Qt6
 - libcap (on Linux)
+- Overlay, Linux: Vulkan, OpenGL and EGL development packages (`libvulkan-dev`, `libgl-dev`, `libegl-dev`)
+- Overlay, Windows: Microsoft Detours from vcpkg (`detours:x64-windows-static` and `detours:x86-windows-static`); configure with `-DCMAKE_TOOLCHAIN_FILE=<vcpkg root>/scripts/buildsystems/vcpkg.cmake`
 
 ### Instructions
 
