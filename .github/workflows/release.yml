@@ -1,0 +1,185 @@
+# Release build for the AurexTranslator plugins.
+
+name: release
+
+on:
+  push:
+    tags: ['[0-9]*']
+  workflow_dispatch:
+
+jobs:
+  # ------------------------------------------------------------------
+  # Windows x64: injector library, 64-bit plugins and overlay (needs Qt, prebuilt)
+  # ------------------------------------------------------------------
+  windows-x64:
+    name: 'Windows x64: plugins'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Qt comes prebuilt (aqtinstall): building Qt from source in vcpkg takes hours and fills the runner disk.
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Install the Vulkan SDK (for the Vulkan layer of the overlay)
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.3.296.0
+          install_runtime: false
+          cache: true
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $out = "$env:GITHUB_WORKSPACE/stage/plugins"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" -DPLUGINS_OUTPUT_DIR="$out" 2>&1 | Tee-Object cfg.log
+          if (Select-String -Path cfg.log -SimpleMatch 'Vulkan SDK not found') { throw 'Vulkan SDK was not found: the release would have no Vulkan layer' }
+          cmake --build build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-x64
+          path: stage
+
+  # ------------------------------------------------------------------
+  # Windows x86: 32-bit plugins and overlay. No Qt and no vcpkg needed.
+  # ------------------------------------------------------------------
+  windows-x86:
+    name: 'Windows x86: plugins'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Vulkan SDK (for the Vulkan layer of the overlay)
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.3.296.0
+          install_runtime: false
+          cache: true
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $out = "$env:GITHUB_WORKSPACE/stage/plugins"
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPLUGINS_OUTPUT_DIR="$out" 2>&1 | Tee-Object cfg.log
+          if (Select-String -Path cfg.log -SimpleMatch 'Vulkan SDK not found') { throw 'Vulkan SDK was not found: the release would have no Vulkan layer' }
+          cmake --build build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-x86
+          path: stage
+
+  # ------------------------------------------------------------------
+  # Linux: 64-bit and 32-bit libraries, built on the oldest supported Ubuntu
+  # ------------------------------------------------------------------
+  linux:
+    name: 'Linux: plugins (64/32-bit)'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable 32-bit packages
+        run: |
+          # The runner pins its apt sources to amd64, so i386 needs its own source.
+          sudo dpkg --add-architecture i386
+          echo 'deb [arch=i386] http://archive.ubuntu.com/ubuntu jammy main universe' | sudo tee /etc/apt/sources.list.d/i386.list
+          echo 'deb [arch=i386] http://archive.ubuntu.com/ubuntu jammy-updates main universe' | sudo tee -a /etc/apt/sources.list.d/i386.list
+          sudo sed -i -E 's/^deb (http)/deb [arch=amd64] \1/' /etc/apt/sources.list || true
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc-multilib g++-multilib cmake ninja-build pkg-config \
+            qt6-base-dev qt6-base-dev-tools qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools \
+            libx11-dev libxcomposite-dev libxfixes-dev libxrandr-dev libwayland-dev wayland-protocols \
+            libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb-glx0-dev libgl1-mesa-dev \
+            libcap-dev libpipewire-0.3-dev \
+            libvulkan-dev libgl-dev libegl-dev \
+            libvulkan-dev:i386 libgl-dev:i386 libegl-dev:i386
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DPLUGINS_OUTPUT_DIR="$PWD/stage/plugins"
+          cmake --build build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: stage
+
+  # ------------------------------------------------------------------
+  # Assemble the draft release
+  # ------------------------------------------------------------------
+  release:
+    name: 'Release (draft)'
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [windows-x64, windows-x86, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble the archives
+        run: |
+          set -e
+          licenses() {  # $1 = target folder
+            mkdir -p "$1/licenses"
+            cp COPYING.* "$1/licenses/"
+            cp overlay/NOTICE "$1/licenses/NOTICE-overlay"
+            cp data/THIRD-PARTY-LICENSES "$1/licenses/"
+          }
+
+          # windows.tar.gz: plugins/ + README_EN.txt + README_RU.txt + licenses/
+          mkdir -p pkg/windows
+          cp -a artifacts/win-x64/plugins pkg/windows/
+          cp -a artifacts/win-x86/plugins/. pkg/windows/plugins/
+          # import libraries and other build leftovers are not needed
+          find pkg/windows -name '*.lib' -o -name '*.exp' -o -name '*.pdb' -o -name '*.ilk' | xargs -r rm -f
+          cp data/windows/README_*.txt pkg/windows/
+          licenses pkg/windows
+
+          # linux.tar.gz
+          mkdir -p pkg/linux
+          cp -a artifacts/linux/plugins pkg/linux/
+          # upload-artifact / download-artifact do not keep file permissions: the app registers at-injector
+          # (plugins/bin) only if the file is executable.
+          find pkg/linux/plugins -type f \( -name '*.so' -o -path '*/bin/*' \) -exec chmod +x {} +
+          cp data/linux/README_*.txt pkg/linux/
+          licenses pkg/linux
+
+          # kirikiri-configs.tar.gz: configs/ + README_EN.txt + README_RU.txt
+          mkdir -p pkg/kirikiri/configs
+          cp data/configs/*.json pkg/kirikiri/configs/
+          cp data/configs/README_*.txt pkg/kirikiri/
+
+          mkdir -p out
+          tar -czf out/windows.tar.gz -C pkg/windows .
+          tar -czf out/linux.tar.gz -C pkg/linux .
+          tar -czf out/kirikiri-configs.tar.gz -C pkg/kirikiri .
+          tar -tzf out/windows.tar.gz | head -40
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Build ${{ github.ref_name }}
+          files: out/*
+          draft: true
