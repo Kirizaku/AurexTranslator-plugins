@@ -62,6 +62,16 @@ static inline bool hlog_enabled(void)
     return enabled;
 }
 
+static inline bool hlog_stderr(void)
+{
+    static int enabled = -1;
+    if (enabled == -1) {
+        const char *v = getenv("AT_OVERLAY_LOG_STDERR");
+        enabled = v && *v && strcmp(v, "0") != 0;
+    }
+    return enabled;
+}
+
 static inline FILE *hlog_file(void)
 {
     static FILE *f = NULL;
@@ -89,7 +99,8 @@ static inline FILE *hlog_file(void)
 
 #define hlog(msg, ...) do { \
         if (hlog_enabled()) { \
-            fprintf(stderr, "[at-overlay:%d] " msg "\n", (int)getpid(), ##__VA_ARGS__); \
+            if (hlog_stderr()) \
+                fprintf(stderr, "[at-overlay:%d] " msg "\n", (int)getpid(), ##__VA_ARGS__); \
             FILE *_at_lf = hlog_file(); \
             if (_at_lf) { \
                 fprintf(_at_lf, "[at-overlay:%d] " msg "\n", (int)getpid(), ##__VA_ARGS__); \
