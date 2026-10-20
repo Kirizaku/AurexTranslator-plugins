@@ -84,13 +84,11 @@ static bool gl_init_funcs(bool glx)
         return egl_f.valid;
     }
 
-#ifndef NDEBUG
     hlog("Init %s (%s)", glx ? "GLX" : "EGL",
 #ifdef __x86_64__
         "64bit");
 #else
         "32bit");
-#endif
 #endif
 
     capture_init();

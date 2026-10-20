@@ -433,9 +433,7 @@ static bool vk_cpu_init(struct vk_data *data, struct vk_swap_data *swap)
     struct vk_device_funcs *funcs = &data->funcs;
     VkDevice device = data->device;
 
-#ifndef NDEBUG
     hlog("Texture (CPU) %ux%u", swap->image_extent.width, swap->image_extent.height);
-#endif
 
     VkImageCreateInfo img_info = {0};
     img_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -532,9 +530,7 @@ static bool vk_cpu_init(struct vk_data *data, struct vk_swap_data *swap)
 
     data->cur_swap = swap;
     capture_frame_capture_started();
-#ifndef NDEBUG
     hlog("------------------ vulkan capture started (CPU) ------------------");
-#endif
     return true;
 }
 
@@ -565,9 +561,7 @@ static void vk_cpu_free(struct vk_data *data)
     data->cur_swap = NULL;
     capture_stop();
 
-#ifndef NDEBUG
     hlog("------------------- vulkan capture freed (CPU) -------------------");
-#endif
 }
 
 static bool vk_cpu_capture(struct vk_data *data, struct vk_device_funcs *funcs,
@@ -840,9 +834,7 @@ static VkResult VKAPI_CALL AT_CreateInstance(const VkInstanceCreateInfo *info,
         const VkAllocationCallbacks *ac,
         VkInstance *p_inst)
 {
-#ifndef NDEBUG
     hlog("CreateInstance");
-#endif
 
     // ===============================================================
     /* step through chain until we get to the link info         */
@@ -878,9 +870,7 @@ static VkResult VKAPI_CALL AT_CreateInstance(const VkInstanceCreateInfo *info,
     PFN_vkCreateInstance create = (PFN_vkCreateInstance)gpa(NULL, "vkCreateInstance");
 
     VkResult res = create(info, ac, p_inst);
-#ifndef NDEBUG
     hlog("CreateInstance %s", result_to_str(res));
-#endif
     if (res != VK_SUCCESS) {
         vk_free(ac, idata);
         return res;
@@ -919,9 +909,7 @@ static VkResult VKAPI_CALL AT_CreateInstance(const VkInstanceCreateInfo *info,
 static void VKAPI_CALL AT_DestroyInstance(VkInstance instance,
         const VkAllocationCallbacks *ac)
 {
-#ifndef NDEBUG
     hlog("DestroyInstance");
-#endif
 
     struct vk_inst_funcs *ifuncs = get_inst_funcs(instance);
     PFN_vkDestroyInstance destroy_instance = ifuncs->DestroyInstance;
@@ -942,9 +930,7 @@ static VkResult VKAPI_CALL AT_CreateDevice(VkPhysicalDevice phy_device,
         const VkAllocationCallbacks *ac,
         VkDevice *p_device)
 {
-#ifndef NDEBUG
     hlog("CreateDevice");
-#endif
 
     struct vk_inst_data *idata =
         get_inst_data_by_physical_device(phy_device);
@@ -1016,9 +1002,7 @@ static VkResult VKAPI_CALL AT_CreateDevice(VkPhysicalDevice phy_device,
 
     ret = createFunc(phy_device, &create_info, ac, p_device);
     free(exts);
-#ifndef NDEBUG
     hlog("CreateDevice %s", result_to_str(ret));
-#endif
     if (ret != VK_SUCCESS) {
         vk_free(ac, data);
         return ret;
@@ -1145,9 +1129,7 @@ extern void at_overlay_vk_device_destroyed(VkDevice device);
 static void VKAPI_CALL AT_DestroyDevice(VkDevice device,
         const VkAllocationCallbacks *ac)
 {
-#ifndef NDEBUG
     hlog("DestroyDevice");
-#endif
 
     at_overlay_vk_device_destroyed(device);
 
@@ -1187,9 +1169,7 @@ AT_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR *cinfo,
     VkSwapchainCreateInfoKHR info = *cinfo;
     info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     VkResult res = funcs->CreateSwapchainKHR(device, &info, ac, p_sc);
-#ifndef NDEBUG
     hlog("CreateSwapchainKHR %s", result_to_str(res));
-#endif
     if (res != VK_SUCCESS) {
         /* try again with original imageUsage flags */
         return funcs->CreateSwapchainKHR(device, cinfo, ac, p_sc);
@@ -1198,9 +1178,7 @@ AT_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR *cinfo,
     VkSwapchainKHR sc = *p_sc;
     uint32_t count = 0;
     res = funcs->GetSwapchainImagesKHR(device, sc, &count, NULL);
-#ifndef NDEBUG
     hlog("GetSwapchainImagesKHR %s", result_to_str(res));
-#endif
     if ((res == VK_SUCCESS) && (count > 0)) {
         struct vk_swap_data *swap_data = alloc_swap_data(ac);
         if (swap_data) {
@@ -1210,9 +1188,7 @@ AT_CreateSwapchainKHR(VkDevice device, const VkSwapchainCreateInfoKHR *cinfo,
                     VK_SYSTEM_ALLOCATION_SCOPE_OBJECT);
             res = funcs->GetSwapchainImagesKHR(
                     device, sc, &count, swap_data->swap_images);
-#ifndef NDEBUG
             hlog("GetSwapchainImagesKHR %s", result_to_str(res));
-#endif
             swap_data->image_extent = cinfo->imageExtent;
             swap_data->format = cinfo->imageFormat;
             swap_data->color_space = cinfo->imageColorSpace;
@@ -1236,9 +1212,7 @@ static void VKAPI_CALL AT_DestroySwapchainKHR(VkDevice device,
         VkSwapchainKHR sc,
         const VkAllocationCallbacks *ac)
 {
-#ifndef NDEBUG
     hlog("DestroySwapchainKHR");
-#endif
 
     struct vk_data *data = get_device_data(device);
     struct vk_device_funcs *funcs = &data->funcs;
@@ -1329,13 +1303,11 @@ VKAPI_ATTR VkResult VKAPI_CALL AT_Negotiate(VkNegotiateLayerInterface *nli)
     }
 
     if (!vulkan_seen) {
-#ifndef NDEBUG
         hlog("Init Vulkan (%s)",
 #ifdef __x86_64__
             "64bit");
 #else
             "32bit");
-#endif
 #endif
         init_obj_list(&instances);
         init_obj_list(&devices);
