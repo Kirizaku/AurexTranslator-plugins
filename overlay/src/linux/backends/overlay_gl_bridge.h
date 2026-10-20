@@ -27,6 +27,7 @@ struct at_gl_fb_funcs {
     void (*GetIntegerv)(unsigned pname, int *params);
     void (*BindFramebuffer)(unsigned target, unsigned framebuffer);
     void *(*GetCurrentContext)(void);
+    int (*GetTextureSize)(unsigned texture, int *width, int *height);
 };
 
 void at_overlay_gl_draw(int width, int height, const struct at_gl_fb_funcs *fb);

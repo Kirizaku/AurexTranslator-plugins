@@ -135,6 +135,25 @@ extern "C" void at_overlay_gl_draw(int width, int height, const struct at_gl_fb_
     ImDrawData* draw = ImGui::GetDrawData();
     if (!draw || draw->CmdListsCount == 0) return;
 
+    // A texture name of the overlay's that the game has taken over (see GetTextureSize in glinject.c):
+    // drawing with it shows the game's texture as glyphs, and the atlas updates fail with GL errors.
+    // The overlay's texture is made again under a new name, and the game's is left alone
+    if (fb && fb->GetTextureSize) {
+        for (ImTextureData* tex : ImGui::GetPlatformIO().Textures) {
+            if (tex->Status != ImTextureStatus_OK && tex->Status != ImTextureStatus_WantUpdates)
+                continue;
+            
+            const unsigned id = (unsigned)(intptr_t)tex->TexID;
+            int w = 0, h = 0;
+            if (id && fb->GetTextureSize(id, &w, &h) && (w != tex->Width || h != tex->Height)) {
+                hlog("overlay_gl: texture %u is %dx%d in GL but %dx%d here, the game took the name; making it again", 
+                    id, w, h, tex->Width, tex->Height);
+                tex->SetTexID(ImTextureID_Invalid);
+                tex->SetStatus(ImTextureStatus_WantCreate);
+            }
+        }
+    }
+
     int last_draw_fbo = 0, last_read_fbo = 0;
     const bool retarget = (fb && fb->GetIntegerv && fb->BindFramebuffer);
     if (retarget) {

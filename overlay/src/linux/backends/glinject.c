@@ -209,6 +209,35 @@ static void *overlay_get_current_context(void)
     return egl_f.GetCurrentContext ? egl_f.GetCurrentContext() : NULL;
 }
 
+/* How big GL says the texture of this name is. The overlay keeps its own textures (the font
+ * atlas) in the game's context, where the names are shared with the game: when a game frees and
+ * reuses a name the overlay still holds, the overlay is left writing to, and drawing with, a
+ * texture of the game's. This is how the overlay finds out */
+static int overlay_get_texture_size(unsigned texture, int *width, int *height)
+{
+    static bool resolved;
+    static void (*get_level)(unsigned, int, unsigned, int *);
+    static void (*bind_texture)(unsigned, unsigned);
+
+    if (!resolved) {
+        resolved = true;
+        get_level = (void (*)(unsigned, int, unsigned, int *))gl_f.GetProcAddress("glGetTexLevelParameteriv");
+        bind_texture = (void (*)(unsigned, unsigned))gl_f.GetProcAddress("glBindTexture");
+    }
+    
+    if (!get_level || !bind_texture || !gl_f.GetIntegerv)
+        return 0;
+
+    int previous = 0;
+    gl_f.GetIntegerv(0x8069 /* GL_TEXTURE_BINDING_2D */, &previous);
+    bind_texture(0x0DE1 /* GL_TEXTURE_2D */, texture);
+    *width = *height = 0;
+    get_level(0x0DE1, 0, 0x1000 /* GL_TEXTURE_WIDTH */, width);
+    get_level(0x0DE1, 0, 0x1001 /* GL_TEXTURE_HEIGHT */, height);
+    bind_texture(0x0DE1, (unsigned)previous);
+    return 1;
+}
+
 static void at_overlay_draw_for(void *display, void *drawable)
 {
     static int disabled = -1;
@@ -228,6 +257,7 @@ static void at_overlay_draw_for(void *display, void *drawable)
     overlay_fb_funcs.GetIntegerv       = (void (*)(unsigned, int *))gl_f.GetIntegerv;
     overlay_fb_funcs.BindFramebuffer   = (void (*)(unsigned, unsigned))gl_f.BindFramebuffer;
     overlay_fb_funcs.GetCurrentContext = overlay_get_current_context;
+    overlay_fb_funcs.GetTextureSize    = overlay_get_texture_size;
 
     at_overlay_gl_draw(w, h, &overlay_fb_funcs);
 }
