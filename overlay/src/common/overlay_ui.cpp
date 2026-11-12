@@ -41,6 +41,7 @@ void at_overlay_draw_ui(const char *backend, int width, int height)
         ImGui::Text("at-overlay (%s) %dx%d", backend, width, height);
     else
         ImGui::Text("at-overlay %dx%d", width, height);
+    ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
     ImGui::End();
 #endif
 }
