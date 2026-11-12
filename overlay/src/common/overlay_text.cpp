@@ -25,7 +25,6 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -181,21 +180,20 @@ bool file_readable(const char* p)
     return true;
 }
 
-const ImWchar* pick_ranges(ImGuiIO& io)
+ImFont* add_font_without_fatal_assert(ImFontAtlas* atlas, const char* path, float size, const ImFontConfig* config = nullptr)
 {
-    const char* r = std::getenv("AT_OVERLAY_FONT_RANGES");
-    if (!r || !*r) return io.Fonts->GetGlyphRangesCyrillic();
-
-    if (!std::strcmp(r, "cyrillic"))   return io.Fonts->GetGlyphRangesCyrillic();
-    if (!std::strcmp(r, "japanese"))   return io.Fonts->GetGlyphRangesJapanese();
-    if (!std::strcmp(r, "korean"))     return io.Fonts->GetGlyphRangesKorean();
-    if (!std::strcmp(r, "greek"))      return io.Fonts->GetGlyphRangesGreek();
-    if (!std::strcmp(r, "thai"))       return io.Fonts->GetGlyphRangesThai();
-    if (!std::strcmp(r, "vietnamese")) return io.Fonts->GetGlyphRangesVietnamese();
-    if (!std::strcmp(r, "chinese"))    return io.Fonts->GetGlyphRangesChineseSimplifiedCommon();
-    if (!std::strcmp(r, "default"))    return io.Fonts->GetGlyphRangesDefault();
-
-    return io.Fonts->GetGlyphRangesCyrillic();
+    // Let ImGui reject unsupported font files without aborting the game (for example only emoji fonts)
+    ImGuiIO& io = ImGui::GetIO();
+    struct AssertSettingGuard {
+        ImGuiIO& io;
+        bool previous;
+        explicit AssertSettingGuard(ImGuiIO& value) : io(value), previous(value.ConfigErrorRecoveryEnableAssert)
+        {
+            io.ConfigErrorRecoveryEnableAssert = false;
+        }
+        ~AssertSettingGuard() { io.ConfigErrorRecoveryEnableAssert = previous; }
+    } guard(io);
+    return atlas->AddFontFromFileTTF(path, size, config, nullptr);
 }
 
 float pick_font_size()
@@ -418,11 +416,32 @@ void at_text_setup_font()
         io.Fonts->AddFontDefault();
         return;
     }
-    const ImWchar* ranges = pick_ranges(io);
-
-    if (!io.Fonts->AddFontFromFileTTF(path, size, nullptr, ranges)) {
-        std::fprintf(stderr, "[at-overlay] failed to load font %s\n", path);
+    ImFont* loaded_font = nullptr;
+    const char* loaded_path = nullptr;
+    if (path) {
+        loaded_font = add_font_without_fatal_assert(io.Fonts, path, size);
+        if (loaded_font)
+            loaded_path = path;
+        else
+            std::fprintf(stderr, "[at-overlay] font '%s' is unsupported by the built-in font loader; trying a fallback\n", path);
+    }
+    if (!loaded_font) {
+        for (const char* const* c = kFontCandidates; *c; ++c) {
+            if (!file_readable(*c) || (path && std::strcmp(path, *c) == 0)) {
+                continue;
+            }
+            loaded_font = add_font_without_fatal_assert(io.Fonts, *c, size);
+            if (loaded_font) {
+                loaded_path = *c;
+                break;
+            }
+        }
+    }
+    if (!loaded_font) {
+        std::fprintf(stderr, "[at-overlay] no usable TTF found; using the built-in ASCII font\n");
         io.Fonts->AddFontDefault();
+    } else {
+        std::fprintf(stderr, "[at-overlay] loaded font '%s' with dynamic glyphs\n", loaded_path);
     }
 
     if (seen_scripts) {
@@ -431,18 +450,10 @@ void at_text_setup_font()
             if (file_readable(*c)) { cjk_path = *c; break; }
         }
         if (cjk_path) {
-            static ImVector<ImWchar> s_cjk_ranges;
-            ImFontGlyphRangesBuilder b;
-            if (seen_scripts & kScriptJapanese) b.AddRanges(io.Fonts->GetGlyphRangesJapanese());
-            if (seen_scripts & kScriptKorean)   b.AddRanges(io.Fonts->GetGlyphRangesKorean());
-            if (seen_scripts & kScriptChinese)  b.AddRanges(io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
-            s_cjk_ranges.clear();
-            b.BuildRanges(&s_cjk_ranges);
-
             ImFontConfig cfg;
             cfg.MergeMode  = true;
             cfg.PixelSnapH = true;
-            if (!io.Fonts->AddFontFromFileTTF(cjk_path, size, &cfg, s_cjk_ranges.Data))
+            if (!add_font_without_fatal_assert(io.Fonts, cjk_path, size, &cfg))
                 std::fprintf(stderr, "[at-overlay] failed to load CJK font %s\n", cjk_path);
         } else if (!warned_no_cjk_font) {
             std::lock_guard<std::mutex> lk(st.mtx);
