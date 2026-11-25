@@ -39,19 +39,6 @@ extern "C" {
 
 namespace at {
 
-inline void swizzle_rgba_to_bgra(void* data, int width, int height, int pitch)
-{
-    for (int y = 0; y < height; ++y) {
-        uint8_t* row = (uint8_t*)data + (size_t)y * pitch;
-        for (int x = 0; x < width; ++x) {
-            uint8_t* px = row + (size_t)x * 4;
-            const uint8_t r = px[0];
-            px[0] = px[2];
-            px[2] = r;
-        }
-    }
-}
-
 // ===============================================================
 // Logging
 // ===============================================================

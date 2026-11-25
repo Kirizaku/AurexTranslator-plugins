@@ -222,32 +222,30 @@ void PluginWorker::onProcessFound(m_pid_t pid)
             return;
         }
 #endif
-        {
-            void* handle = nullptr;
+        void* handle = nullptr;
 #if defined(Q_OS_WINDOWS)
-            handle = reinterpret_cast<void*>(module);
+        handle = reinterpret_cast<void*>(module);
 #else
-            handle = persistedHandleFor(pid);
-            if (!handle) {
-                emitMessage(tr("Library already loaded in \"%1\" but its handle is "
-                                      "unknown; cannot unload cleanly. Please close the game and "
-                                      "start again").arg(m_processName));
-                stop();
-                return;
-            }
+        handle = persistedHandleFor(pid);
+        if (!handle) {
+            emitMessage(tr("Library already loaded in \"%1\" but its handle is "
+                           "unknown; cannot unload cleanly. Please close the game and "
+                           "start again").arg(m_processName));
+            stop();
+            return;
+        }
 #endif
 
-            emitMessage(tr("Stale library found in \"%1\". Reinjecting...").arg(m_processName));
-            m_libraryHandle = handle;
-            startInjectorProcess(QStringLiteral("unload"), pid, QString(), m_processArch);
-            m_libraryHandle = nullptr;
+        emitMessage(tr("Stale library found in \"%1\". Reinjecting...").arg(m_processName));
+        m_libraryHandle = handle;
+        startInjectorProcess(QStringLiteral("unload"), pid, QString(), m_processArch);
+        m_libraryHandle = nullptr;
 
-            if (!m_running) return; // unload failed and triggered stop()
+        if (!m_running) return; // unload failed and triggered stop()
 
 #ifdef Q_OS_LINUX
-            clearPersistedHandle();
+        clearPersistedHandle();
 #endif
-        }
         module = 0;
     }
 
@@ -432,7 +430,7 @@ void PluginWorker::handlePipeMessage(const IpcPipe::Message& msg)
 void PluginWorker::cleanupAndUnload()
 {
 #ifdef Q_OS_WIN
-    const bool skipUnload = (isOverlay()) && process_ever_vk_chained(m_pid);
+    const bool skipUnload = isOverlay() || process_ever_vk_chained(m_pid);
 #else
     const bool skipUnload = false;
 #endif

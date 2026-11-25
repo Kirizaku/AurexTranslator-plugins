@@ -29,10 +29,9 @@ Modifications:
   - Hook implementations are resolved through a single exported getter
     (at_overlay_resolve_hook) with per-symbol atomic caching, instead of
     MangoHud's per-call real_dlsym() on the loaded library.
-  - The hooked symbol set follows obs-vkcapture's glinject.c, not
+  - The hooked symbol set follows third_party/obs-vkcapture/glinject.c, not
     MangoHud's; glXCreateWindow comes from obs-vkcapture commit c7410bb.
-    eglCreateWindowSurface is not hooked: it only fed the window id to
-    the DMA-BUF export, which this project removed.
+    eglCreateWindowSurface is not intercepted by this shim
   - Added dlvsym override, eager constructor load (AT_OVERLAY_LAZY),
     and the /etc + ~/.config blacklist files.
 

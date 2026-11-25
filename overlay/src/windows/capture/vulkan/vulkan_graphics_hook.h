@@ -2,7 +2,6 @@
     at-overlay - in-game overlay for AurexTranslator
 
     Copyright (C) 2026 by Daniil Nabiulin
-    Copyright (C) 2021 by David Rosca <nowrep@gmail.com> (obs-vkcapture)
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -18,37 +17,18 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ******************************************************************************/
 
-/*
-Windows capture/control channel (game side)
-
-Windows counterpart of src/linux/capture.c: the same state machine and
-128-byte messages over a named pipe instead of an abstract Unix socket
-Frames go through shared memory (see overlay_protocol.h)
-*/
-
 #pragma once
-
-#include <cstdint>
-
-extern "C" {
-#include "host/overlay_protocol.h"
-}
-
-namespace at {
-
-void capture_init();
-void capture_shutdown();
-void capture_update();
-void capture_force_disconnect();
-void capture_stop();
-
-bool capture_should_stop();
-bool capture_should_init();
-bool capture_ready();
-
-bool capture_frame_requested();
-void capture_frame_delivered();
-bool capture_write_frame(int width, int height, const void* bgra_top_down, int src_pitch);
-void capture_frame_capture_started();
-
-} // namespace at
+#include <windows.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include "capture_bridge.h"
+struct shtex_data { int unused; };
+struct obs_vk_settings { bool allow_srgb_alias; bool force_shmem; };
+extern struct obs_vk_settings *global_hook_info;
+bool at_obs_vk_ready(void);
+bool at_obs_vk_init_shtex(struct shtex_data **out, HWND window, uint32_t width,
+                          uint32_t height, uint32_t format, bool flip, uintptr_t handle);
+#undef capture_ready
+#define capture_ready() at_obs_vk_ready()
+#define capture_init_shtex at_obs_vk_init_shtex

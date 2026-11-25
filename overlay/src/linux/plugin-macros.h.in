@@ -1,0 +1,7 @@
+#pragma once
+
+#cmakedefine01 HAVE_X11_XCB
+#cmakedefine01 HAVE_X11_XLIB
+#cmakedefine01 HAVE_WAYLAND
+
+#define PLUGIN_VERSION "AT adapter"

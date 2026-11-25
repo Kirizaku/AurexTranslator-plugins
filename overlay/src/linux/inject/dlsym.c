@@ -19,11 +19,8 @@
 ******************************************************************************/
 
 /*
-NOTE: Derived from obs-vkcapture/src/dlsym.c.
-Modifications:
-  - The ld-musl fallback in dl_init_funcs() follows MangoHud's
-    src/real_dlsym.c, which searches "*ld-musl-*.so*" after libdl and
-    libc. obs-vkcapture stops at libc and has no musl fallback
+NOTE: Derived from obs-vkcapture/src/dlsym.c
+The resolver searches libdl, libc and musl; the failure message names all three
 */
 
 #include "dlsym.h"

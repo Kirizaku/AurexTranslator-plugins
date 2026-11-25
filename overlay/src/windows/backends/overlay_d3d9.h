@@ -21,8 +21,7 @@
 /*
 Direct3D9 overlay + capture on Windows (interface)
 
-Structure parallels obs-studio/plugins/win-capture/graphics-hook (d3d9-capture.c),
-rewritten for this project.
+The OBS capture implementation is connected through the AT bridge.
 */
 
 #pragma once

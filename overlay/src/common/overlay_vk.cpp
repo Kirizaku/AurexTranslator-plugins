@@ -31,6 +31,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -93,6 +94,7 @@ struct OverlayCtx {
 
     ImGuiContext* imgui = nullptr;
     bool          imguiInit = false;
+    uint32_t      imguiImageCount = 0;
 
     uint32_t graphicsFamily = 0;
     VkQueue  graphicsQueue  = VK_NULL_HANDLE;
@@ -100,6 +102,24 @@ struct OverlayCtx {
 
 std::mutex g_mtx;
 std::unordered_map<VkDevice, OverlayCtx*> g_ctx;
+
+VKAPI_ATTR VkResult VKAPI_CALL imgui_allocate_command_buffers(VkDevice device, const VkCommandBufferAllocateInfo* info, VkCommandBuffer* buffers)
+{
+    const auto it = g_ctx.find(device);
+    if (it == g_ctx.end() || !it->second->AllocateCommandBuffers)
+        return VK_ERROR_INITIALIZATION_FAILED;
+
+    const VkResult result = it->second->AllocateCommandBuffers(device, info, buffers);
+    if (result == VK_SUCCESS) {
+        for (uint32_t i = 0; i < info->commandBufferCount; ++i) {
+            if (!at_bridge_set_dispatch_key(device, buffers[i])) {
+                it->second->FreeCommandBuffers(device, info->commandPool, info->commandBufferCount, buffers);
+                return VK_ERROR_INITIALIZATION_FAILED;
+            }
+        }
+    }
+    return result;
+}
 
 #define LOAD_DEV(c, fn) c->fn = (PFN_vk##fn)c->gdpa(c->device, "vk" #fn)
 
@@ -189,12 +209,16 @@ bool init_render_pass(OverlayCtx* c)
 
 bool init_descriptor_pool(OverlayCtx* c)
 {
-    VkDescriptorPoolSize ps[] = {{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64 }};
+    VkDescriptorPoolSize ps[] = {
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 64 },
+        { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 64 },
+        { VK_DESCRIPTOR_TYPE_SAMPLER, 64 },
+    };
     VkDescriptorPoolCreateInfo ci{};
     ci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     ci.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    ci.maxSets       = 64;
-    ci.poolSizeCount = 1;
+    ci.maxSets       = 128;
+    ci.poolSizeCount = IM_ARRAYSIZE(ps);
     ci.pPoolSizes    = ps;
     return c->CreateDescriptorPool(c->device, &ci, nullptr, &c->descPool) == VK_SUCCESS;
 }
@@ -215,6 +239,10 @@ bool init_command_pool(OverlayCtx* c)
         ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         ai.commandBufferCount = 1;
         if (c->AllocateCommandBuffers(c->device, &ai, &f.cmd) != VK_SUCCESS) return false;
+        if (!at_bridge_set_dispatch_key(c->device, f.cmd)) {
+            hlog("overlay_vk: failed to initialize command buffer dispatch key");
+            return false;
+        }
 
         VkFenceCreateInfo fi{};
         fi.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
@@ -273,6 +301,13 @@ bool init_framebuffers(OverlayCtx* c, const at_bridge_info* bi)
 PFN_vkVoidFunction imgui_loader_cb(const char* name, void* ud)
 {
     auto* c = (OverlayCtx*)ud;
+    if (std::strcmp(name, "vkAllocateCommandBuffers") == 0)
+        return reinterpret_cast<PFN_vkVoidFunction>(imgui_allocate_command_buffers);
+
+    const bool instanceFunction = std::strncmp(name, "vkGetPhysicalDevice", 19) == 0 ||
+                                  std::strcmp(name, "vkEnumeratePhysicalDevices") == 0 ||
+                                  std::strcmp(name, "vkDestroySurfaceKHR") == 0;
+    if (instanceFunction && c->gipa) return c->gipa(c->instance, name);
     if (c->gdpa) {
         if (auto p = c->gdpa(c->device, name)) return p;
     }
@@ -319,6 +354,7 @@ bool init_imgui(OverlayCtx* c, uint32_t imageCount)
         return false;
     }
     c->imguiInit = true;
+    c->imguiImageCount = imageCount;
     return true;
 }
 
@@ -352,6 +388,7 @@ extern "C" void at_overlay_vk_draw(struct vk_data* data, VkQueue queue, VkPresen
 
     at_bridge_info bi{};
     if (!at_bridge_collect(data, info->pSwapchains[0], &bi)) return;
+    if (bi.image_count < 2) return;
 
     std::lock_guard<std::mutex> lk(g_mtx);
 
@@ -382,20 +419,25 @@ extern "C" void at_overlay_vk_draw(struct vk_data* data, VkQueue queue, VkPresen
     const bool swapChanged   = (c->currentSwap != bi.swapchain) ||
                                (c->swapExtent.width  != bi.extent.width) ||
                                (c->swapExtent.height != bi.extent.height);
+    const bool imageCountChanged = c->imguiInit && c->imguiImageCount != bi.image_count;
 
-    if (formatChanged || swapChanged) {
+    if (formatChanged || swapChanged || imageCountChanged) {
         if (c->DeviceWaitIdle) c->DeviceWaitIdle(c->device);
 
         destroy_framebuffers(c);
 
-        if (formatChanged) {
+        if (formatChanged || imageCountChanged) {
             if (c->imguiInit) {
                 ImGui::SetCurrentContext(c->imgui);
                 ImGui_ImplVulkan_Shutdown();
                 ImGui::DestroyContext(c->imgui);
                 c->imgui = nullptr;
                 c->imguiInit = false;
+                c->imguiImageCount = 0;
             }
+        }
+
+        if (formatChanged) {
             if (c->renderPass) {
                 c->DestroyRenderPass(c->device, c->renderPass, nullptr);
                 c->renderPass = VK_NULL_HANDLE;

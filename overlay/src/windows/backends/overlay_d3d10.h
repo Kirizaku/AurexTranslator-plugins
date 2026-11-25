@@ -18,12 +18,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ******************************************************************************/
 
-/*
-D3D10 swapchain overlay + capture (interface)
-
-Structure parallels obs-studio/plugins/win-capture/graphics-hook
-(d3d10-capture.c), rewritten for this project
-*/
+/* D3D10 swapchain overlay interface. Capture uses the adapted OBS backend */
 
 #pragma once
 

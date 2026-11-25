@@ -1,3 +1,5 @@
+enable_language(C)
+
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
     set(AT_OVERLAY_ARCH "x64")
 else()
@@ -36,7 +38,7 @@ add_library(at_overlay_imgui_dx STATIC
     ${IMGUI_DIR}/backends/imgui_impl_dx10.cpp
     ${IMGUI_DIR}/backends/imgui_impl_dx11.cpp
     ${IMGUI_DIR}/backends/imgui_impl_dx12.cpp
-    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+    ${AT_OVERLAY_WIN}/capture/gl/imgui_gl_backend.cpp
 )
 target_include_directories(at_overlay_imgui_dx PUBLIC ${IMGUI_DIR})
 
@@ -51,30 +53,42 @@ if(AT_OVERLAY_BUILD_VULKAN)
             ${IMGUI_DIR}/imgui_widgets.cpp
             ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
         )
-        target_include_directories(at_overlay_imgui_vk PUBLIC ${IMGUI_DIR})
+        target_include_directories(at_overlay_imgui_vk PUBLIC ${IMGUI_DIR} ${Vulkan_INCLUDE_DIRS})
         target_compile_definitions(at_overlay_imgui_vk PUBLIC
             IMGUI_IMPL_VULKAN_NO_PROTOTYPES=1
             VK_NO_PROTOTYPES=1
         )
-        target_link_libraries(at_overlay_imgui_vk PUBLIC Vulkan::Vulkan)
     else()
         message(STATUS "libat-overlay: Vulkan SDK not found, skipping the Vulkan layer")
     endif()
 endif()
 
 add_library(libat-overlay SHARED
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/obs-studio/graphics-hook/d3d10-capture.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/obs-studio/graphics-hook/d3d11-capture.cpp
+    ${AT_OVERLAY_WIN}/capture/d3d/obs_dxgi_bridge.cpp
+    ${AT_OVERLAY_WIN}/capture/d3d/obs_d3d9_bridge.cpp
+    ${AT_OVERLAY_WIN}/capture/d3d/d3d9_offsets.cpp
+    ${AT_OVERLAY_WIN}/capture/d3d/obs_d3d12_bridge.cpp
+    ${AT_OVERLAY_WIN}/capture/d3d/obs_dxgi_hook_bridge.cpp
+    ${AT_OVERLAY_WIN}/capture/gl/obs_gl_capture.c
+    ${AT_OVERLAY_WIN}/capture/gl/obs_gl_bridge.cpp
     ${AT_OVERLAY_WIN}/inject/dllmain.cpp
     ${AT_OVERLAY_WIN}/backends/hook_dxgi.cpp
+    ${AT_OVERLAY_WIN}/backends/overlay_d3d11.cpp
     ${AT_OVERLAY_WIN}/backends/overlay_d3d12.cpp
     ${AT_OVERLAY_WIN}/backends/overlay_d3d10.cpp
     ${AT_OVERLAY_WIN}/backends/overlay_d3d9.cpp
     ${AT_OVERLAY_WIN}/backends/overlay_gl.cpp
-    ${AT_OVERLAY_WIN}/win_capture.cpp
+    ${AT_OVERLAY_WIN}/capture/win_capture.cpp
     ${AT_OVERLAY_COMMON}/overlay_text.cpp
     ${AT_OVERLAY_COMMON}/overlay_ui.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/windows.rc
 )
 target_include_directories(libat-overlay PRIVATE
+    ${AT_OVERLAY_WIN}/capture/d3d
+    ${AT_OVERLAY_WIN}/capture
+    ${DETOURS_DIR}
     ${AT_OVERLAY_COMMON}
     ${AT_OVERLAY_WIN}
     ${AT_OVERLAY_WIN}/backends
@@ -94,8 +108,8 @@ set_target_properties(libat-overlay PROPERTIES
 
 if(AT_OVERLAY_HAVE_VULKAN)
     target_sources(libat-overlay PRIVATE
-        ${AT_OVERLAY_WIN}/layer/vklayer_win.cpp
-        ${AT_OVERLAY_WIN}/layer/vk_capture_win.cpp
+        ${AT_OVERLAY_WIN}/capture/vulkan/obs_vk_adapter.c
+        ${AT_OVERLAY_WIN}/layer/capture_bridge.cpp
         ${AT_OVERLAY_COMMON}/overlay_vk.cpp
         ${AT_OVERLAY_WIN}/layer/vklayer.def
     )

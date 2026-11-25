@@ -18,58 +18,34 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ******************************************************************************/
 
-/*
-D3D12 swapchain overlay backend
-
-Structure follows obs-studio/plugins/win-capture/graphics-hook
-(d3d12-capture.c), rewritten for this project.
-*/
-
-#include "win_common.h"
-#include "win_capture.h"
-#include "overlay_d3d12.h"
-#include "overlay_text.h"
-#include "overlay_ui.h"
+/* D3D12 swapchain overlay renderer and capture integration */
 
 #include <d3d12.h>
 #include <d3d11.h>
+#include <d3d11on12.h>
 #include <dxgi1_4.h>
 
-#include <atomic>
+#include <cstring>
 #include <vector>
 
-#include <detours/detours.h>
+#include "win_common.h"
+#include "win_capture.h"
+#include "../capture/d3d/obs_capture_bridge.h"
 
 #include "imgui.h"
 #include "backends/imgui_impl_dx12.h"
 
+#include "overlay_d3d12.h"
+#include "overlay_text.h"
+#include "overlay_ui.h"
+
+extern thread_local int dxgi_presenting;
+extern ID3D12CommandQueue *dxgi_possible_swap_queues[8];
+extern size_t dxgi_possible_swap_queue_count;
+extern bool dxgi_present_attempted;
+
 namespace at {
 namespace {
-
-// ===============================================================
-// Command-queue capture
-// ===============================================================
-
-typedef void(STDMETHODCALLTYPE* PFN_ExecuteCommandLists)(
-    ID3D12CommandQueue*, UINT, ID3D12CommandList* const*);
-
-PFN_ExecuteCommandLists real_ExecuteCommandLists = nullptr;
-std::atomic<ID3D12CommandQueue*> g_captured_queue{nullptr};
-
-void STDMETHODCALLTYPE hook_ExecuteCommandLists(ID3D12CommandQueue* q, UINT n,
-                                                ID3D12CommandList* const* lists)
-{
-    HookEntry guard;
-    if (guard && q) {
-        /* Only DIRECT queues present; compute/copy queues are not what the
-         * swapchain runs on, so ignore them to avoid capturing the wrong one. */
-        D3D12_COMMAND_QUEUE_DESC d = q->GetDesc();
-        if (d.Type == D3D12_COMMAND_LIST_TYPE_DIRECT) {
-            g_captured_queue.store(q, std::memory_order_relaxed);
-        }
-    }
-    real_ExecuteCommandLists(q, n, lists);
-}
 
 // ===============================================================
 // Shader-visible SRV heap sub-allocator
@@ -143,6 +119,7 @@ struct Frame {
 
 struct OverlayD3D12 {
     IDXGISwapChain*     swap  = nullptr;
+    HWND                window = nullptr;
     ID3D12Device*       dev   = nullptr;
     ID3D12CommandQueue* queue = nullptr;
 
@@ -164,13 +141,7 @@ struct OverlayD3D12 {
     ImGuiContext* imgui    = nullptr;
     bool          imgui_ok = false;
 
-    ID3D12Resource*            cap_buf         = nullptr;
-    ID3D12CommandAllocator*    cap_alloc       = nullptr;
-    ID3D12GraphicsCommandList* cap_cmdlist     = nullptr;
-    ID3D12Fence*               cap_fence       = nullptr;
-    UINT64                     cap_fence_value = 0;
-    HANDLE                     cap_fence_event = nullptr;
-    UINT                       cap_row_pitch   = 0;
+    bool                        capture_active  = false;
 };
 
 OverlayD3D12 g_ov;
@@ -208,7 +179,6 @@ void wait_idle()
 // ===============================================================
 
 void capture_release_shared();
-void capture_release_device();
 
 void release_targets()
 {
@@ -238,7 +208,6 @@ void shutdown_overlay()
     }
 
     release_targets();
-    capture_release_device();
     g_ov.srv.destroy();
 
     if (g_ov.fence_event) { CloseHandle(g_ov.fence_event); g_ov.fence_event = nullptr; }
@@ -248,6 +217,7 @@ void shutdown_overlay()
     safe_release(g_ov.queue);
     safe_release(g_ov.dev);
     g_ov.swap = nullptr;
+    g_ov.window = nullptr;
 }
 
 // ===============================================================
@@ -266,28 +236,35 @@ DXGI_FORMAT rtv_format(DXGI_FORMAT f)
 bool acquire_device_queue(IDXGISwapChain* swap,
                           ID3D12Device** out_dev, ID3D12CommandQueue** out_queue)
 {
-    ID3D12CommandQueue* q = nullptr;
-    if (SUCCEEDED(swap->GetDevice(__uuidof(ID3D12CommandQueue), (void**)&q)) && q) {
-        ID3D12Device* d = nullptr;
-        if (SUCCEEDED(q->GetDevice(__uuidof(ID3D12Device), (void**)&d)) && d) {
-            *out_queue = q;
-            *out_dev   = d;
-            return true;
+    ID3D12Device* swap_device = nullptr;
+    if (FAILED(swap->GetDevice(__uuidof(ID3D12Device), (void**)&swap_device)) || !swap_device)
+        return false;
+
+    ID3D12CommandQueue* match = nullptr;
+    {
+        for (size_t i = dxgi_possible_swap_queue_count; i > 0; --i) {
+            ID3D12CommandQueue* candidate = dxgi_possible_swap_queues[i - 1];
+            ID3D12Device* candidate_device = nullptr;
+            if (SUCCEEDED(candidate->GetDevice(__uuidof(ID3D12Device),
+                                                (void**)&candidate_device)) && candidate_device) {
+                const bool same_device = candidate_device == swap_device;
+                candidate_device->Release();
+                if (same_device) {
+                    candidate->AddRef();
+                    match = candidate;
+                    break;
+                }
+            }
         }
-        q->Release();
     }
 
-    ID3D12CommandQueue* cq = g_captured_queue.load(std::memory_order_relaxed);
-    if (cq) {
-        ID3D12Device* d = nullptr;
-        if (SUCCEEDED(cq->GetDevice(__uuidof(ID3D12Device), (void**)&d)) && d) {
-            cq->AddRef();
-            *out_queue = cq;
-            *out_dev   = d;
-            return true;
-        }
+    if (!match) {
+        swap_device->Release();
+        return false;
     }
-    return false;
+    *out_dev = swap_device;
+    *out_queue = match;
+    return true;
 }
 
 bool ensure_device(IDXGISwapChain* swap)
@@ -330,12 +307,12 @@ bool ensure_targets(IDXGISwapChain* swap)
 {
     DXGI_SWAP_CHAIN_DESC desc = {};
     if (FAILED(swap->GetDesc(&desc))) return false;
-
+    g_ov.window = desc.OutputWindow;
     const bool changed = (desc.BufferDesc.Width  != g_ov.width) ||
                          (desc.BufferDesc.Height != g_ov.height) ||
                          (desc.BufferDesc.Format != g_ov.format) ||
                          (desc.BufferCount        != g_ov.buffer_count) ||
-                         g_ov.frames.empty();
+                         g_ov.frames.empty() || !g_ov.rtv_heap || !g_ov.cmdlist;
 
     if (!changed) return true;
 
@@ -372,6 +349,7 @@ bool ensure_targets(IDXGISwapChain* swap)
 
         if (FAILED(swap->GetBuffer(i, __uuidof(ID3D12Resource), (void**)&f.backbuffer)) || !f.backbuffer) {
             hlog("d3d12: GetBuffer(%u) failed", i);
+            release_targets();
             return false;
         }
         f.rtv = rtv;
@@ -381,6 +359,7 @@ bool ensure_targets(IDXGISwapChain* swap)
         if (FAILED(g_ov.dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
             __uuidof(ID3D12CommandAllocator), (void**)&f.alloc))) {
             hlog("d3d12: CreateCommandAllocator(%u) failed", i);
+            release_targets();
             return false;
         }
         f.fence_value = 0;
@@ -389,6 +368,7 @@ bool ensure_targets(IDXGISwapChain* swap)
     if (FAILED(g_ov.dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
         g_ov.frames[0].alloc, nullptr, __uuidof(ID3D12GraphicsCommandList), (void**)&g_ov.cmdlist))) {
         hlog("d3d12: CreateCommandList failed");
+        release_targets();
         return false;
     }
     g_ov.cmdlist->Close();
@@ -400,161 +380,11 @@ bool ensure_targets(IDXGISwapChain* swap)
 // Capture path
 // ===============================================================
 
-constexpr UINT kTexturePitchAlign = 256; /* D3D12_TEXTURE_DATA_PITCH_ALIGNMENT */
-
-UINT align_up(UINT v, UINT a) { return (v + a - 1) & ~(a - 1); }
-
 void capture_release_shared()
 {
-    safe_release(g_ov.cap_buf);
-    capture_stop();
-}
-
-void capture_release_device()
-{
-    if (g_ov.cap_fence_event) { CloseHandle(g_ov.cap_fence_event); g_ov.cap_fence_event = nullptr; }
-    safe_release(g_ov.cap_fence);
-    safe_release(g_ov.cap_cmdlist);
-    safe_release(g_ov.cap_alloc);
-}
-
-bool format_supported(DXGI_FORMAT f)
-{
-    switch (f) {
-    case DXGI_FORMAT_R8G8B8A8_UNORM:
-    case DXGI_FORMAT_B8G8R8A8_UNORM:
-        return true;
-    default:
-        return false;
-    }
-}
-
-bool capture_init(IDXGISwapChain* swap)
-{
-    (void)swap;
-    if (!format_supported(rtv_format(g_ov.format))) return false;
-
-    if (!g_ov.cap_fence) {
-        if (FAILED(g_ov.dev->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-            __uuidof(ID3D12CommandAllocator), (void**)&g_ov.cap_alloc))) {
-            hlog("d3d12: CreateCommandAllocator(capture) failed");
-            return false;
-        }
-        if (FAILED(g_ov.dev->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-            g_ov.cap_alloc, nullptr, __uuidof(ID3D12GraphicsCommandList), (void**)&g_ov.cap_cmdlist))) {
-            hlog("d3d12: CreateCommandList(capture) failed");
-            capture_release_device();
-            return false;
-        }
-        g_ov.cap_cmdlist->Close();
-        if (FAILED(g_ov.dev->CreateFence(0, D3D12_FENCE_FLAG_NONE,
-            __uuidof(ID3D12Fence), (void**)&g_ov.cap_fence))) {
-            hlog("d3d12: CreateFence(capture) failed");
-            capture_release_device();
-            return false;
-        }
-        g_ov.cap_fence_event = CreateEventA(nullptr, FALSE, FALSE, nullptr);
-        if (!g_ov.cap_fence_event) {
-            hlog("d3d12: CreateEvent(capture) failed");
-            capture_release_device();
-            return false;
-        }
-    }
-
-    g_ov.cap_row_pitch = align_up(g_ov.width * 4, kTexturePitchAlign);
-    const UINT64 bufSize = (UINT64)g_ov.cap_row_pitch * g_ov.height;
-
-    D3D12_HEAP_PROPERTIES hp = {};
-    hp.Type = D3D12_HEAP_TYPE_READBACK;
-
-    D3D12_RESOURCE_DESC rd = {};
-    rd.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
-    rd.Width            = bufSize;
-    rd.Height           = 1;
-    rd.DepthOrArraySize = 1;
-    rd.MipLevels        = 1;
-    rd.SampleDesc.Count = 1;
-    rd.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    rd.Format           = DXGI_FORMAT_UNKNOWN; /* buffers are always UNKNOWN */
-
-    if (FAILED(g_ov.dev->CreateCommittedResource(
-            &hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST,
-            nullptr, __uuidof(ID3D12Resource), (void**)&g_ov.cap_buf))) {
-        hlog("d3d12: CreateCommittedResource(readback) failed");
-        return false;
-    }
-
-    capture_frame_capture_started();
-    return true;
-}
-
-bool capture_copy(UINT idx)
-{
-    if (!g_ov.cap_buf || idx >= g_ov.frames.size()) return false;
-    Frame& f = g_ov.frames[idx];
-    if (!f.backbuffer) return false;
-
-    if (FAILED(g_ov.cap_alloc->Reset())) return false;
-    if (FAILED(g_ov.cap_cmdlist->Reset(g_ov.cap_alloc, nullptr))) return false;
-
-    D3D12_RESOURCE_BARRIER b = {};
-    b.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    b.Transition.pResource   = f.backbuffer;
-    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    b.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
-    b.Transition.StateAfter  = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    g_ov.cap_cmdlist->ResourceBarrier(1, &b);
-
-    D3D12_TEXTURE_COPY_LOCATION dst = {};
-    dst.pResource                          = g_ov.cap_buf;
-    dst.Type                               = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-    dst.PlacedFootprint.Offset             = 0;
-    dst.PlacedFootprint.Footprint.Format   = rtv_format(g_ov.format);
-    dst.PlacedFootprint.Footprint.Width    = g_ov.width;
-    dst.PlacedFootprint.Footprint.Height   = g_ov.height;
-    dst.PlacedFootprint.Footprint.Depth    = 1;
-    dst.PlacedFootprint.Footprint.RowPitch = g_ov.cap_row_pitch;
-
-    D3D12_TEXTURE_COPY_LOCATION src = {};
-    src.pResource        = f.backbuffer;
-    src.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    src.SubresourceIndex = 0;
-
-    g_ov.cap_cmdlist->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-
-    b.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
-    b.Transition.StateAfter  = D3D12_RESOURCE_STATE_PRESENT;
-    g_ov.cap_cmdlist->ResourceBarrier(1, &b);
-
-    if (FAILED(g_ov.cap_cmdlist->Close())) return false;
-
-    ID3D12CommandList* lists[] = { g_ov.cap_cmdlist };
-
-    if (real_ExecuteCommandLists) {
-        real_ExecuteCommandLists(g_ov.queue, 1, lists);
-    } else {
-        g_ov.queue->ExecuteCommandLists(1, lists);
-    }
-
-    const UINT64 v = ++g_ov.cap_fence_value;
-    if (FAILED(g_ov.queue->Signal(g_ov.cap_fence, v))) return false;
-    if (g_ov.cap_fence->GetCompletedValue() < v) {
-        g_ov.cap_fence->SetEventOnCompletion(v, g_ov.cap_fence_event);
-        WaitForSingleObject(g_ov.cap_fence_event, INFINITE);
-    }
-
-    void* mapped = nullptr;
-    const D3D12_RANGE readRange = { 0, (SIZE_T)g_ov.cap_row_pitch * g_ov.height };
-    if (FAILED(g_ov.cap_buf->Map(0, &readRange, &mapped))) return false;
-
-    if (rtv_format(g_ov.format) == DXGI_FORMAT_R8G8B8A8_UNORM)
-        swizzle_rgba_to_bgra(mapped, (int)g_ov.width, (int)g_ov.height, (int)g_ov.cap_row_pitch);
-
-    const bool ok = capture_write_frame((int)g_ov.width, (int)g_ov.height, mapped, (int)g_ov.cap_row_pitch);
-
-    const D3D12_RANGE writtenRange = { 0, 0};
-    g_ov.cap_buf->Unmap(0, &writtenRange);
-    return ok;
+    if (g_ov.capture_active) wait_idle();
+    d3d12_capture::free();
+    g_ov.capture_active = false;
 }
 
 // ===============================================================
@@ -605,7 +435,8 @@ bool ensure_imgui()
 void build_ui()
 {
     ImGuiIO& io = ImGui::GetIO();
-    at_overlay_draw_ui("D3D12", (int)io.DisplaySize.x, (int)io.DisplaySize.y);
+    at_overlay_draw_ui("D3D12", (int)io.DisplaySize.x, (int)io.DisplaySize.y,
+                       g_ov.capture_active ? "GPU" : "Waiting");
 }
 
 // ===============================================================
@@ -673,11 +504,7 @@ void draw_overlay(IDXGISwapChain* swap)
     if (FAILED(g_ov.cmdlist->Close())) return;
 
     ID3D12CommandList* lists[] = { g_ov.cmdlist };
-    if (real_ExecuteCommandLists) {
-        real_ExecuteCommandLists(g_ov.queue, 1, lists);
-    } else {
-        g_ov.queue->ExecuteCommandLists(1, lists);
-    }
+    at_obs_d3d12_execute(g_ov.queue, 1, lists);
 
     const UINT64 v = ++g_ov.fence_last;
     if (SUCCEEDED(g_ov.queue->Signal(g_ov.fence, v))) f.fence_value = v;
@@ -707,37 +534,19 @@ void on_present(IDXGISwapChain* swap)
 
     capture_update();
 
-    if (capture_should_stop()) capture_release_shared();
-    if (capture_should_init()) { if (!capture_init(swap)) capture_stop(); }
-    if (capture_ready() && g_ov.cap_buf && capture_frame_requested()) {
-        IDXGISwapChain3* s3 = nullptr;
-        if (SUCCEEDED(swap->QueryInterface(__uuidof(IDXGISwapChain3), (void**)&s3)) && s3) {
-            const UINT idx = s3->GetCurrentBackBufferIndex();
-            s3->Release();
-            if (capture_copy(idx)) capture_frame_delivered();
-        }
-    }
+    d3d12_capture::capture(swap, g_ov.queue);
+    g_ov.capture_active = d3d12_capture::uses_gpu();
 
     draw_overlay(swap);
 }
 
 bool is_d3d12(IDXGISwapChain* swap)
 {
-    ID3D12CommandQueue* q = nullptr;
-    if (SUCCEEDED(swap->GetDevice(__uuidof(ID3D12CommandQueue), (void**)&q)) && q) {
-        q->Release();
-        return true;
-    }
-
-    if (g_captured_queue.load(std::memory_order_relaxed)) {
-        ID3D11Device* d11 = nullptr;
-        if (SUCCEEDED(swap->GetDevice(__uuidof(ID3D11Device), (void**)&d11)) && d11) {
-            d11->Release();
-            return false;
-        }
-        return true;
-    }
-    return false;
+    ID3D12Device* device = nullptr;
+    if (FAILED(swap->GetDevice(__uuidof(ID3D12Device), (void**)&device)) || !device)
+        return false;
+    device->Release();
+    return true;
 }
 
 } // namespace
@@ -752,54 +561,7 @@ bool d3d12_hook_queue()
         InitializeCriticalSection(&g_lock);
         g_lock_ready = true;
     }
-
-    ID3D12Device* dev = nullptr;
-    HRESULT hr = D3D12CreateDevice(nullptr, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void**)&dev);
-    if (FAILED(hr) || !dev) {
-        IDXGIFactory4* factory = nullptr;
-        if (SUCCEEDED(CreateDXGIFactory1(__uuidof(IDXGIFactory4), (void**)&factory)) && factory) {
-            IDXGIAdapter* warp = nullptr;
-            if (SUCCEEDED(factory->EnumWarpAdapter(__uuidof(IDXGIAdapter), (void**)&warp)) && warp) {
-                hr = D3D12CreateDevice(warp, D3D_FEATURE_LEVEL_11_0, __uuidof(ID3D12Device), (void**)&dev);
-                warp->Release();
-            }
-            factory->Release();
-        }
-    }
-    if (FAILED(hr) || !dev) {
-        hlog("d3d12: no device (D3D12 unavailable) — D3D12 overlay disabled");
-        return false;
-    }
-
-    D3D12_COMMAND_QUEUE_DESC qd = {};
-    qd.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    ID3D12CommandQueue* queue = nullptr;
-    hr = dev->CreateCommandQueue(&qd, __uuidof(ID3D12CommandQueue), (void**)&queue);
-    if (FAILED(hr) || !queue) {
-        hlog("d3d12: CreateCommandQueue (dummy) failed");
-        dev->Release();
-        return false;
-    }
-
-    void** vt = *(void***)queue;
-    void* target = vt[10]; /*ExecuteCommandLists*/
-
-    queue->Release();
-    dev->Release();
-
-    real_ExecuteCommandLists = (PFN_ExecuteCommandLists)target;
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
-    const bool attached = DetourAttach(&(PVOID&)real_ExecuteCommandLists,
-                                        (PVOID)hook_ExecuteCommandLists) == NO_ERROR;
-    if (!attached || DetourTransactionCommit() != NO_ERROR) {
-        hlog("d3d12: failed to hook ID3D12CommandQueue::ExecuteCommandLists");
-        real_ExecuteCommandLists = nullptr;
-        return false;
-    }
-
-    hlog("d3d12: ExecuteCommandLists hooked (%p)", target);
-    return true;
+    return at_obs_d3d12_hook_install();
 }
 
 bool d3d12_try_present(IDXGISwapChain* swap)
@@ -825,15 +587,20 @@ void d3d12_on_resize()
     release_targets();
 }
 
+void d3d12_on_swapchain_shutdown(IDXGISwapChain* swap)
+{
+    Lock lk;
+    if (g_ov.swap != swap) return;
+
+    hlog("d3d12: releasing overlay and capture resources before fullscreen transition");
+    shutdown_overlay();
+    dxgi_possible_swap_queue_count = 0;
+    memset(dxgi_possible_swap_queues, 0, sizeof(dxgi_possible_swap_queues));
+}
+
 void d3d12_shutdown()
 {
-    if (real_ExecuteCommandLists) {
-        DetourTransactionBegin();
-        DetourUpdateThread(GetCurrentThread());
-        DetourDetach(&(PVOID&)real_ExecuteCommandLists, (PVOID)hook_ExecuteCommandLists);
-        DetourTransactionCommit();
-        real_ExecuteCommandLists = nullptr;
-    }
+    at_obs_d3d12_hook_uninstall();
 
     if (g_lock_ready) {
         EnterCriticalSection(&g_lock);
@@ -842,6 +609,10 @@ void d3d12_shutdown()
         DeleteCriticalSection(&g_lock);
         g_lock_ready = false;
     }
+    dxgi_possible_swap_queue_count = 0;
+    memset(dxgi_possible_swap_queues, 0, sizeof(dxgi_possible_swap_queues));
+    dxgi_presenting = 0;
+    dxgi_present_attempted = false;
 }
 
 } // namespace at

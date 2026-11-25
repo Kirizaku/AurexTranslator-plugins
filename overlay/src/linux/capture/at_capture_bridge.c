@@ -19,11 +19,14 @@
 ******************************************************************************/
 
 /*
-NOTE: This file is derived from obs-vkcapture/src/capture.c
-Modifications:
-  - DMA-BUF export removed (capture_init_shtex() and the allocation hints
-    read from the control message); frames are delivered through shared
-    memory instead, see capture_write_frame().
+AT IPC bridge for the Linux capture backends. Its socket framing and DMA-BUF
+metadata are based on third_party/obs-vkcapture/capture.c; it adapts that transport to
+the AT host protocol. The Vulkan GPU image-copy path remains in the upstream
+third_party/obs-vkcapture/vklayer.c included by obs_vk_adapter.c.
+
+AT protocol adaptations:
+  - AT retains upstream's DMA-BUF texture export message, but replaces OBS
+    shared-memory texture consumption with AT's capture request semaphore.
   - socket name: /com/obsproject/vkcapture -> /com/at_overlay/capture
   - env var:     OBS_VKCAPTURE_NAME       -> AT_OVERLAY_NAME
   - wine-preloader override kept as-is.
@@ -44,8 +47,10 @@ Modifications:
 #include "host/overlay_protocol.h"
 #include "utils.h"
 #include "overlay_text.h"
+#include "overlay_ui.h"
 
 #include <stdio.h>
+#include <stddef.h>
 #include <string.h>
 
 #include <errno.h>
@@ -64,7 +69,19 @@ static struct {
     bool accepted;
     bool frame_capture_allowed;
     bool capturing;
+    bool gpu_fallback_requested;
+    bool device_uuid_valid;
+    uint8_t device_uuid[16];
 } data;
+
+static uint8_t capture_device_uuid[16];
+static bool capture_device_uuid_valid;
+
+void capture_set_device_uuid(const uint8_t uuid[16])
+{
+    memcpy(capture_device_uuid, uuid, sizeof(capture_device_uuid));
+    capture_device_uuid_valid = true;
+}
 
 static bool get_wine_exe(char *buf, size_t bufsize)
 {
@@ -83,16 +100,22 @@ static bool get_wine_exe(char *buf, size_t bufsize)
 
 static bool get_exe(char *buf, size_t bufsize)
 {
+    if (bufsize == 0)
+        return false;
+
     char *custom_name = getenv("AT_OVERLAY_NAME");
     if (custom_name) {
         strncpy(buf, custom_name, bufsize);
+        buf[bufsize - 1] = '\0';
         return true;
     }
+
     char exe[PATH_MAX];
-    ssize_t n = readlink("/proc/self/exe", exe, PATH_MAX);
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
     if (n <= 0) {
         return false;
     }
+
     exe[n] = '\0';
     strncpy(buf, basename(exe), bufsize);
     buf[bufsize - 1] = '\0';
@@ -112,14 +135,14 @@ static bool capture_try_connect(void)
     memcpy(&addr.sun_path[1], sockname, sizeof(sockname) - 1);
 
     int sock = socket(PF_LOCAL, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
-    int ret = connect(sock, (const struct sockaddr *)&addr,
-            sizeof(addr.sun_family) + sizeof(sockname));
+    int ret = connect(sock, (const struct sockaddr *)&addr, sizeof(addr.sun_family) + sizeof(sockname));
     if (ret == -1) {
         close(sock);
         return false;
     }
 
     data.connfd = sock;
+    data.gpu_fallback_requested = false;
 
     struct capture_client_data cd;
     memset(&cd, 0, sizeof(cd));
@@ -132,6 +155,7 @@ static bool capture_try_connect(void)
         .iov_base = &cd,
         .iov_len = CAPTURE_CLIENT_DATA_SIZE,
     };
+
     msg.msg_iov = &io;
     msg.msg_iovlen = 1;
 
@@ -159,6 +183,11 @@ static void handle_control(const struct capture_control_data *control)
 {
     data.accepted = control->capturing == 1;
     data.frame_capture_allowed = control->allow_frame_capture == 1;
+    data.device_uuid_valid = control->device_uuid_valid == 1;
+    memcpy(data.device_uuid, control->device_uuid, sizeof(data.device_uuid));
+    if (!data.frame_capture_allowed)
+        data.gpu_fallback_requested = false;
+
     at_session_set_active(data.accepted ? 1 : 0);
 }
 
@@ -248,6 +277,13 @@ static bool consume_rx(void)
             continue;
         }
 
+        if (type == CAPTURE_GPU_FALLBACK_DATA_TYPE) {
+            data.gpu_fallback_requested = true;
+            hlog("AT could not import the DMA-BUF; switching capture to CPU readback");
+            off += 1;
+            continue;
+        }
+
         hlog("Unknown message type %u from the app, dropping connection", type);
         return false;
     }
@@ -325,6 +361,7 @@ void capture_update_socket(void)
 void capture_stop(void)
 {
     data.capturing = false;
+    capture_set_method("Waiting");
 }
 
 bool capture_should_stop(void)
@@ -342,12 +379,19 @@ bool capture_ready(void)
     return data.capturing;
 }
 
+bool capture_gpu_fallback_requested(void)
+{
+    return data.gpu_fallback_requested;
+}
+
 static struct {
     int   fd;
     void *view;
     sem_t *req_sem;
     sem_t *ready_sem;
 } frame;
+
+static void ensure_frame_sems(void);
 
 static bool ensure_frame_mapping(void)
 {
@@ -360,14 +404,15 @@ static bool ensure_frame_mapping(void)
         hlog("shm_open(frame) failed: %s", strerror(errno));
         return false;
     }
+
     if (ftruncate(frame.fd, (off_t)AT_OVERLAY_FRAME_MAPPING_SIZE) != 0) {
         hlog("ftruncate(frame) failed: %s", strerror(errno));
         close(frame.fd);
         frame.fd = -1;
         return false;
     }
-    frame.view = mmap(NULL, (size_t)AT_OVERLAY_FRAME_MAPPING_SIZE,
-                      PROT_READ | PROT_WRITE, MAP_SHARED, frame.fd, 0);
+
+    frame.view = mmap(NULL, (size_t)AT_OVERLAY_FRAME_MAPPING_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, frame.fd, 0);
     if (frame.view == MAP_FAILED) {
         hlog("mmap(frame) failed: %s", strerror(errno));
         close(frame.fd);
@@ -380,10 +425,15 @@ static bool ensure_frame_mapping(void)
 
 bool capture_write_frame(int width, int height, const void *bgra_top_down, int src_pitch)
 {
+    int64_t abs_pitch = src_pitch;
+    if (abs_pitch < 0) abs_pitch = -abs_pitch;
+
     if (width <= 0 || height <= 0 ||
-        width > AT_OVERLAY_FRAME_MAX_WIDTH || height > AT_OVERLAY_FRAME_MAX_HEIGHT) {
+        width > AT_OVERLAY_FRAME_MAX_WIDTH || height > AT_OVERLAY_FRAME_MAX_HEIGHT ||
+        !bgra_top_down || abs_pitch < (int64_t)width * 4) {
         return false;
     }
+
     if (!ensure_frame_mapping()) {
         return false;
     }
@@ -392,9 +442,14 @@ bool capture_write_frame(int width, int height, const void *bgra_top_down, int s
     uint8_t *dst = (uint8_t *)frame.view + AT_OVERLAY_FRAME_HEADER_SIZE;
     const uint8_t *src = (const uint8_t *)bgra_top_down;
     const int dst_pitch = width * 4;
+    uint32_t *sequence = (uint32_t *)((uint8_t *)frame.view + offsetof(struct at_overlay_frame_header, reserved));
+    uint32_t seq = __atomic_load_n(sequence, __ATOMIC_RELAXED);
+    if (seq & 1u) ++seq;
+    __atomic_store_n(sequence, seq + 1u, __ATOMIC_SEQ_CST);
 
     for (int y = 0; y < height; ++y) {
-        memcpy(dst + (size_t)y * dst_pitch, src + (size_t)y * src_pitch, (size_t)dst_pitch);
+        memcpy(dst + (size_t)y * dst_pitch,
+               src + (ptrdiff_t)y * src_pitch, (size_t)dst_pitch);
     }
 
     hdr->width  = (uint32_t)width;
@@ -402,6 +457,7 @@ bool capture_write_frame(int width, int height, const void *bgra_top_down, int s
     hdr->stride = (uint32_t)dst_pitch;
     hdr->format = AT_OVERLAY_FRAME_FORMAT_BGRA8;
     hdr->frame_counter++;
+    __atomic_store_n(sequence, seq + 2u, __ATOMIC_RELEASE);
     return true;
 }
 
@@ -419,6 +475,52 @@ static void ensure_frame_sems(void)
         frame.ready_sem = sem_open(AT_OVERLAY_CAPTURE_READY_SEM, O_CREAT, 0600, 0);
         if (frame.ready_sem == SEM_FAILED) frame.ready_sem = NULL;
     }
+
+}
+
+void capture_init_shtex(int width, int height, int format, int strides[4],
+        int offsets[4], uint64_t modifier, uint32_t winid, bool flip,
+        uint32_t color_space, int nfd, int fds[4])
+{
+    if (data.connfd < 0 || nfd < 1 || nfd > 4) return;
+
+    struct capture_gpu_texture_data td = {0};
+    td.type = CAPTURE_GPU_TEXTURE_DATA_TYPE;
+    td.nfd = (uint8_t)nfd;
+    td.width = width;
+    td.height = height;
+    td.format = format;
+    memcpy(td.strides, strides, sizeof(td.strides));
+    memcpy(td.offsets, offsets, sizeof(td.offsets));
+    td.modifier = modifier;
+    td.winid = winid;
+    td.flip = flip ? 1 : 0;
+    td.color_space = color_space;
+    if (capture_device_uuid_valid)
+        memcpy(td.device_uuid, capture_device_uuid, sizeof(td.device_uuid));
+
+    struct iovec io = { .iov_base = &td, .iov_len = sizeof(td) };
+    char control[CMSG_SPACE(sizeof(int) * 4)] = {0};
+    struct msghdr msg = {0};
+    msg.msg_iov = &io;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control;
+    msg.msg_controllen = CMSG_SPACE(sizeof(int) * nfd);
+
+    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int) * nfd);
+    memcpy(CMSG_DATA(cmsg), fds, sizeof(int) * nfd);
+
+    if (sendmsg(data.connfd, &msg, MSG_NOSIGNAL) != (ssize_t)sizeof(td)) {
+        hlog("DMA-BUF metadata send failed: %s", strerror(errno));
+        return;
+    }
+
+    ensure_frame_sems();
+    data.capturing = true;
+    capture_set_method("GPU");
 }
 
 bool capture_frame_requested(void)
@@ -432,12 +534,40 @@ bool capture_frame_requested(void)
 
 void capture_frame_delivered(void)
 {
-    if (frame.ready_sem) {
-        sem_post(frame.ready_sem);
-    }
+    ensure_frame_sems();
+    if (frame.ready_sem) sem_post(frame.ready_sem);
+}
+
+void capture_gpu_frame_delivered(void)
+{
+    if (data.connfd < 0)
+        return;
+    
+    const uint8_t type = CAPTURE_GPU_READY_DATA_TYPE;
+    ssize_t sent;
+    do {
+        sent = send(data.connfd, &type, sizeof(type), MSG_NOSIGNAL | MSG_DONTWAIT);
+    } while (sent < 0 && errno == EINTR);
 }
 
 void capture_frame_capture_started(void)
 {
     data.capturing = true;
+}
+
+void capture_set_method(const char *method)
+{
+    at_overlay_set_capture_method(method);
+}
+
+/* Keep the upstream default allocation policy */
+bool capture_allocate_no_modifiers(void) { return false; }
+bool capture_allocate_linear(void) { return false; }
+bool capture_allocate_map_host(void) { return false; }
+bool capture_compare_device_uuid(uint8_t uuid[16])
+{
+    const bool matches = data.device_uuid_valid && memcmp(data.device_uuid, uuid, 16) == 0;
+    hlog("GPU device UUID comparison: %s", data.device_uuid_valid ?
+         (matches ? "same device" : "different devices") : "AT UUID unavailable");
+    return matches;
 }

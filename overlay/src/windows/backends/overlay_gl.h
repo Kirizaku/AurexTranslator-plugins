@@ -21,8 +21,8 @@
 /*
 OpenGL (WGL) overlay + capture on Windows (interface)
 
-Structure parallels obs-studio/plugins/win-capture/graphics-hook
-(gl-capture.c), rewritten for this project.
+Capture implementation is adapted from OBS Studio's gl-capture.c. The OBS
+capture transport is replaced by AurexTranslator's win_capture channel.
 */
 
 #pragma once
@@ -31,5 +31,6 @@ namespace at {
 
 bool hook_gl_install();
 void hook_gl_uninstall();
+bool gl_capture_internal_present_active();
 
 } // namespace at

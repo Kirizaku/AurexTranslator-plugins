@@ -292,7 +292,7 @@ void draw_aligned_paragraph(ImFont* font, float font_size, const char* text, con
 } // namespace
 
 // ===============================================================
-// C API — called from capture.c / win_capture.cpp
+// C API — called from at_capture_bridge.c / win_capture.cpp
 // ===============================================================
 
 extern "C" void at_text_set(int visible, const char* src,  uint32_t src_len, const char* text, uint32_t text_len)

@@ -18,24 +18,21 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ******************************************************************************/
 
-/*
-D3D10 swapchain overlay + capture
-
-Structure parallels obs-studio/plugins/win-capture/graphics-hook
-(d3d10-capture.c), rewritten for this project.
-*/
-
-#include "win_common.h"
-#include "win_capture.h"
-#include "overlay_d3d10.h"
-#include "overlay_text.h"
-#include "overlay_ui.h"
+/* D3D10 swapchain overlay renderer */
 
 #include <d3d10.h>
 #include <dxgi.h>
 
+#include "win_common.h"
+#include "win_capture.h"
+#include "../capture/d3d/obs_capture_bridge.h"
+
 #include "imgui.h"
 #include "backends/imgui_impl_dx10.h"
+
+#include "overlay_d3d10.h"
+#include "overlay_text.h"
+#include "overlay_ui.h"
 
 namespace at {
 namespace {
@@ -44,10 +41,6 @@ struct OverlayD3D10 {
     IDXGISwapChain*         swap = nullptr; 
     ID3D10Device*           dev  = nullptr; /* device == immediate context */
     ID3D10RenderTargetView* rtv  = nullptr;
-
-    /* Capture */
-    ID3D10Texture2D* staging = nullptr;
-    ID3D10Texture2D* resolve = nullptr;
 
     UINT        width  = 0;
     UINT        height = 0;
@@ -85,9 +78,6 @@ DXGI_FORMAT rtv_format(DXGI_FORMAT f)
 void release_targets()
 {
     safe_release(g_ov.rtv);
-    safe_release(g_ov.staging);
-    safe_release(g_ov.resolve);
-    capture_stop();
 }
 
 void shutdown_overlay()
@@ -167,79 +157,6 @@ bool ensure_targets(IDXGISwapChain* swap)
     return true;
 }
 
-bool init_staging_texture()
-{
-    D3D10_TEXTURE2D_DESC td = {};
-    td.Width            = g_ov.width;
-    td.Height           = g_ov.height;
-    td.MipLevels        = 1;
-    td.ArraySize        = 1;
-    td.Format           = rtv_format(g_ov.format);
-    td.SampleDesc.Count = 1;
-    td.Usage            = D3D10_USAGE_STAGING;
-    td.CPUAccessFlags   = D3D10_CPU_ACCESS_READ;
-
-    HRESULT hr = g_ov.dev->CreateTexture2D(&td, nullptr, &g_ov.staging);
-    if (FAILED(hr)) {
-        static bool logged = false;
-        if (!logged) { logged = true; hlog("d3d10: CreateTexture2D(staging) failed: 0x%08lx", (unsigned long)hr); }
-        return false;
-    }
-
-    if (g_ov.sample_count > 1) {
-        D3D10_TEXTURE2D_DESC rtd = td;
-        rtd.Usage          = D3D10_USAGE_DEFAULT;
-        rtd.CPUAccessFlags = 0;
-        rtd.BindFlags      = D3D10_BIND_SHADER_RESOURCE | D3D10_BIND_RENDER_TARGET;
-        if (FAILED(g_ov.dev->CreateTexture2D(&rtd, nullptr, &g_ov.resolve))) {
-            hlog("d3d10: CreateTexture2D(resolve) failed");
-            safe_release(g_ov.staging);
-            return false;
-        }
-    }
-
-    capture_frame_capture_started();
-    return true;
-}
-
-bool format_supported(DXGI_FORMAT f)
-{
-    switch (f) {
-    case DXGI_FORMAT_R8G8B8A8_UNORM:
-    case DXGI_FORMAT_B8G8R8A8_UNORM:
-        return true;
-    default:
-        return false;
-    }
-}
-
-bool copy_backbuffer(IDXGISwapChain* swap)
-{
-    if (!g_ov.staging || !format_supported(rtv_format(g_ov.format))) return false;
-
-    ID3D10Texture2D* backbuffer = nullptr;
-    if (FAILED(swap->GetBuffer(0, __uuidof(ID3D10Texture2D), (void**)&backbuffer)) ||
-        !backbuffer) {
-        return false;
-    }
-
-    if (g_ov.sample_count > 1) {
-        g_ov.dev->ResolveSubresource(g_ov.resolve, 0, backbuffer, 0, rtv_format(g_ov.format));
-        g_ov.dev->CopyResource(g_ov.staging, g_ov.resolve);
-    } else {
-        g_ov.dev->CopyResource(g_ov.staging, backbuffer);
-    }
-    backbuffer->Release();
-
-    D3D10_MAPPED_TEXTURE2D map = {};
-    if (FAILED(g_ov.staging->Map(0, D3D10_MAP_READ, 0, &map))) return false;
-    if (rtv_format(g_ov.format) == DXGI_FORMAT_R8G8B8A8_UNORM)
-        swizzle_rgba_to_bgra(map.pData, (int)g_ov.width, (int)g_ov.height, (int)map.RowPitch);
-    const bool ok = capture_write_frame((int)g_ov.width, (int)g_ov.height, map.pData, (int)map.RowPitch);
-    g_ov.staging->Unmap(0);
-    return ok;
-}
-
 // ===============================================================
 // ImGui
 // ===============================================================
@@ -270,7 +187,9 @@ bool ensure_imgui()
 void build_ui()
 {
     ImGuiIO& io = ImGui::GetIO();
-    at_overlay_draw_ui("D3D10", (int)io.DisplaySize.x, (int)io.DisplaySize.y);
+    at_overlay_draw_ui("D3D10", (int)io.DisplaySize.x, (int)io.DisplaySize.y,
+                       d3d10_capture::uses_gpu() ? "GPU" :
+                       d3d10_capture::uses_cpu() ? "CPU" : "Waiting");
 }
 
 void draw_overlay()
@@ -308,20 +227,6 @@ void on_present(IDXGISwapChain* swap)
 {
     if (!ensure_device(swap))  return;
     if (!ensure_targets(swap)) return;
-
-    capture_update();
-
-    if (capture_should_stop()) {
-        safe_release(g_ov.staging);
-        safe_release(g_ov.resolve);
-        capture_stop();
-    }
-    if (capture_should_init()) {
-        if (!init_staging_texture()) capture_stop();
-    }
-    if (capture_ready() && g_ov.staging && capture_frame_requested()) {
-        if (copy_backbuffer(swap)) capture_frame_delivered();
-    }
 
     draw_overlay();
 }
@@ -363,7 +268,7 @@ void d3d10_on_resize()
 {
     if (!g_lock_ready) return;
     Lock lk;
-    release_targets();
+    safe_release(g_ov.rtv);
     g_ov.width = g_ov.height = 0;
 }
 

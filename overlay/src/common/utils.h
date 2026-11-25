@@ -19,8 +19,8 @@
 ******************************************************************************/
 
 /*
-NOTE: Derived from obs-vkcapture/src/utils.h.
-Modifications: log tag and env var renamed; os_dupfd_cloexec() (only used by the removed DMA-BUF export) dropped
+NOTE: Derived from obs-vkcapture/src/utils.h
+AT changes the log tag and adds environment-controlled file and stderr logging
 */
 
 #pragma once
@@ -32,6 +32,7 @@ Modifications: log tag and env var renamed; os_dupfd_cloexec() (only used by the
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,6 +51,11 @@ static inline int64_t os_time_get_nano(void)
 #endif
         , &tv);
     return tv.tv_nsec + tv.tv_sec * INT64_C(1000000000);
+}
+
+static inline int os_dupfd_cloexec(int fd)
+{
+    return fcntl(fd, F_DUPFD_CLOEXEC, 0);
 }
 
 static inline bool hlog_enabled(void)

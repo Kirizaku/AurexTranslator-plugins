@@ -5,6 +5,18 @@ find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(EGL egl IMPORTED_TARGET REQUIRED)
 
+find_path(OBS_VKCAPTURE_XCB_INCLUDE xcb/xcb.h)
+find_path(OBS_VKCAPTURE_WAYLAND_INCLUDE wayland-client.h)
+set(HAVE_X11_XCB 0)
+set(HAVE_X11_XLIB 1)
+set(HAVE_WAYLAND 0)
+if(OBS_VKCAPTURE_XCB_INCLUDE)
+    set(HAVE_X11_XCB 1)
+endif()
+if(OBS_VKCAPTURE_WAYLAND_INCLUDE)
+    set(HAVE_WAYLAND 1)
+endif()
+
 set(AT_OVERLAY_LINUX_INJECT "${AT_OVERLAY_LINUX}/inject")
 set(AT_OVERLAY_LINUX_BACKENDS "${AT_OVERLAY_LINUX}/backends")
 
@@ -55,6 +67,13 @@ function(at_overlay_add_linux BITNESS)
     at_overlay_add_note_section(NOTE_VULKAN vulkan ${BITNESS})
 
     set(INCLUDES ${AT_OVERLAY_LINUX_INCLUDES})
+    set(OBS_VKCAPTURE_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/obs-vkcapture-${BITNESS}")
+    file(MAKE_DIRECTORY "${OBS_VKCAPTURE_GENERATED_DIR}")
+    configure_file(
+        "${AT_OVERLAY_LINUX}/plugin-macros.h.in"
+        "${OBS_VKCAPTURE_GENERATED_DIR}/plugin-macros.h"
+        @ONLY
+    )
 
     add_library(at_overlay_imgui_vk_${BITNESS} STATIC
         ${IMGUI_DIR}/imgui.cpp
@@ -83,14 +102,17 @@ function(at_overlay_add_linux BITNESS)
     set(ARCH_TARGETS at_overlay_imgui_vk_${BITNESS} at_overlay_imgui_gl_${BITNESS})
 
     add_library(at_overlay_vklayer_linux_${BITNESS} SHARED
-        ${AT_OVERLAY_LINUX}/vklayer.c
-        ${AT_OVERLAY_LINUX}/capture.c
+        ${AT_OVERLAY_LINUX}/capture/vulkan/obs_vk_adapter.c
+        ${AT_OVERLAY_LINUX}/capture/at_capture_bridge.c
         ${AT_OVERLAY_COMMON}/overlay_vk.cpp
         ${AT_OVERLAY_COMMON}/overlay_text.cpp
         ${AT_OVERLAY_COMMON}/overlay_ui.cpp
         ${NOTE_VULKAN}
     )
-    target_include_directories(at_overlay_vklayer_linux_${BITNESS} PRIVATE ${INCLUDES} ${Vulkan_INCLUDE_DIRS})
+    target_include_directories(at_overlay_vklayer_linux_${BITNESS} PRIVATE
+        ${INCLUDES} ${Vulkan_INCLUDE_DIRS} "${OBS_VKCAPTURE_GENERATED_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/obs-vkcapture"
+    )
     target_link_libraries(at_overlay_vklayer_linux_${BITNESS} PRIVATE
         ${VULKAN_LIB} at_overlay_imgui_vk_${BITNESS} Threads::Threads
     )
@@ -103,9 +125,9 @@ function(at_overlay_add_linux BITNESS)
     list(APPEND ARCH_TARGETS at_overlay_vklayer_linux_${BITNESS})
 
     add_library(at_overlay_opengl_linux_${BITNESS} SHARED
-        ${AT_OVERLAY_LINUX_BACKENDS}/glinject.c
+        ${AT_OVERLAY_LINUX}/capture/gl/obs_gl_adapter.c
         ${AT_OVERLAY_LINUX_BACKENDS}/overlay_gl.cpp
-        ${AT_OVERLAY_LINUX}/capture.c
+        ${AT_OVERLAY_LINUX}/capture/at_capture_bridge.c
         ${AT_OVERLAY_LINUX_INJECT}/dlsym.c
         ${AT_OVERLAY_LINUX_INJECT}/elfhacks.c
         ${AT_OVERLAY_COMMON}/overlay_text.cpp
@@ -113,7 +135,8 @@ function(at_overlay_add_linux BITNESS)
         ${NOTE_OPENGL}
     )
     target_include_directories(at_overlay_opengl_linux_${BITNESS} PRIVATE
-        ${INCLUDES} ${Vulkan_INCLUDE_DIRS}
+        ${INCLUDES} ${Vulkan_INCLUDE_DIRS} "${OBS_VKCAPTURE_GENERATED_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/obs-vkcapture"
     )
     target_link_libraries(at_overlay_opengl_linux_${BITNESS} PRIVATE
         ${CMAKE_DL_LIBS} ${GL_LIB} Threads::Threads at_overlay_imgui_gl_${BITNESS}

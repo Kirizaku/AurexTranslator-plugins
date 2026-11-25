@@ -18,34 +18,31 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ******************************************************************************/
 
-/*
-Direct3D9 overlay + capture on Windows
+/* D3D9 overlay renderer and hook integration */
 
-Structure parallels obs-studio/plugins/win-capture/graphics-hook (d3d9-capture.c),
-rewritten for this project.
-*/
+#include <d3d9.h>
+#include <d3d11.h>
+#include <dxgi.h>
+
+#include <detours/detours.h>
+
+#include <stdio.h>
+#include <cstring>
+#include <intrin.h>
 
 #include "win_common.h"
 #include "win_capture.h"
+#include "../capture/d3d/obs_capture_bridge.h"
+
+#include "imgui.h"
+#include "backends/imgui_impl_dx9.h"
+
 #include "overlay_d3d9.h"
 #include "overlay_text.h"
 #include "overlay_ui.h"
 
-#include <d3d9.h>
-#include <vector>
-
-#include <detours/detours.h>
-#include "imgui.h"
-#include "backends/imgui_impl_dx9.h"
-
 namespace at {
 namespace {
-
-typedef HRESULT(STDMETHODCALLTYPE* PFN_Present)(IDirect3DDevice9*, const RECT*, const RECT*, HWND, const RGNDATA*);
-typedef HRESULT(STDMETHODCALLTYPE* PFN_Reset)(IDirect3DDevice9*, D3DPRESENT_PARAMETERS*);
-
-PFN_Present real_Present = nullptr;
-PFN_Reset   real_Reset   = nullptr;
 
 struct D9State {
     IDirect3DDevice9* dev      = nullptr;
@@ -54,72 +51,20 @@ struct D9State {
     int               width    = 0;
     int               height   = 0;
 
-    /* Capture */
-    IDirect3DSurface9* sysmem = nullptr; /* GetRenderTargetData target */
-    int                cap_w  = 0;
-    int                cap_h  = 0;
 };
 
 D9State g;
 CRITICAL_SECTION g_lock;
 bool g_lock_ready = false;
-thread_local bool g_in_present = false;
 
 struct Lock {
     Lock()  { if (g_lock_ready) EnterCriticalSection(&g_lock); }
     ~Lock() { if (g_lock_ready) LeaveCriticalSection(&g_lock); }
 };
 
-// ===============================================================
-// Capture
-// ===============================================================
-
 void cap_release()
 {
-    safe_release(g.sysmem);
-    g.cap_w = g.cap_h = 0;
-    capture_stop();
-}
-
-bool cap_init(int w, int h)
-{
-    g.cap_w = w; g.cap_h = h;
-    capture_frame_capture_started();
-    return true;
-}
-
-bool cap_copy()
-{
-    IDirect3DSurface9* rt = nullptr;
-    if (FAILED(g.dev->GetRenderTarget(0, &rt)) || !rt) return false;
-    D3DSURFACE_DESC rd = {};
-    rt->GetDesc(&rd);
-
-    if (rd.Format != D3DFMT_X8R8G8B8 && rd.Format != D3DFMT_A8R8G8B8) {
-        rt->Release();
-        return false;
-    }
-
-    if (!g.sysmem &&
-        FAILED(g.dev->CreateOffscreenPlainSurface(rd.Width, rd.Height, rd.Format, D3DPOOL_SYSTEMMEM, &g.sysmem, nullptr))) {
-        hlog("d3d9: CreateOffscreenPlainSurface failed");
-        rt->Release();
-        return false;
-    }
-
-    HRESULT hr = g.dev->GetRenderTargetData(rt, g.sysmem);
-    rt->Release();
-    if (FAILED(hr)) {
-        static bool logged = false;
-        if (!logged) { logged = true; hlog("d3d9: GetRenderTargetData failed: 0x%08lx", (unsigned long)hr); }
-        return false;
-    }
-
-    D3DLOCKED_RECT lr = {};
-    if (FAILED(g.sysmem->LockRect(&lr, nullptr, D3DLOCK_READONLY))) return false;
-    const bool ok = capture_write_frame((int)rd.Width, (int)rd.Height, lr.pBits, (int)lr.Pitch);
-    g.sysmem->UnlockRect();
-    return ok;
+    d3d9_capture::free();
 }
 
 // ===============================================================
@@ -162,7 +107,9 @@ bool ensure_imgui()
 void build_ui()
 {
     ImGuiIO& io = ImGui::GetIO();
-    at_overlay_draw_ui("D3D9", (int)io.DisplaySize.x, (int)io.DisplaySize.y);
+    at_overlay_draw_ui("D3D9", (int)io.DisplaySize.x, (int)io.DisplaySize.y,
+                       d3d9_capture::uses_gpu() ? "GPU" :
+                       d3d9_capture::uses_cpu() ? "CPU" : "Waiting");
 }
 
 void draw_overlay()
@@ -193,120 +140,38 @@ void draw_overlay()
 // Per-present
 // ===============================================================
 
-void on_present(IDirect3DDevice9* dev)
+void draw_obs_present(IDirect3DDevice9* dev)
 {
-    if (vk_overlay_is_active()) return;
-
-    if (g.dev != dev) { shutdown_imgui(); cap_release(); g.dev = dev; }
-
-    IDirect3DSurface9* rt = nullptr;
-    if (FAILED(dev->GetRenderTarget(0, &rt)) || !rt) return;
-    D3DSURFACE_DESC sd = {};
-    rt->GetDesc(&sd);
-    rt->Release();
-    const int w = (int)sd.Width, h = (int)sd.Height;
-    if (w <= 0 || h <= 0) return;
-    g.width = w; g.height = h;
-
-    capture_update();
-
-    if (capture_should_stop()) cap_release();
-    if (capture_ready() && (g.cap_w != w || g.cap_h != h)) cap_release();
-    if (capture_should_init()) {
-        if (!cap_init(w, h)) { cap_release(); capture_stop(); }
-    }
-    if (capture_ready() && capture_frame_requested()) {
-        if (cap_copy()) capture_frame_delivered();
+    if (!dev || vk_overlay_is_active()) return;
+    HookEntry guard;
+    if (!guard) return;
+    Lock lock;
+    if (g.dev != dev) {
+        shutdown_imgui();
+        g.dev = dev;
     }
 
-    draw_overlay();
+    IDirect3DSurface9* surface = nullptr;
+    if (FAILED(dev->GetRenderTarget(0, &surface)) || !surface) return;
+    D3DSURFACE_DESC desc = {};
+    if (SUCCEEDED(surface->GetDesc(&desc)) && desc.Width && desc.Height) {
+        g.width = static_cast<int>(desc.Width);
+        g.height = static_cast<int>(desc.Height);
+        draw_overlay();
+    }
+    surface->Release();
 }
 
-HRESULT STDMETHODCALLTYPE hook_Present(IDirect3DDevice9* dev, const RECT* src,
-                                       const RECT* dst, HWND wnd, const RGNDATA* dirty)
+void reset_obs_device(IDirect3DDevice9* dev)
 {
     HookEntry guard;
-    if (guard && !g_in_present) {
-        g_in_present = true;
-        { Lock lk; on_present(dev); }
-        g_in_present = false;
+    if (!guard) return;
+    Lock lock;
+    if (g.dev == dev && g.imgui_ok) {
+        ImGui::SetCurrentContext(g.imgui);
+        ImGui_ImplDX9_InvalidateDeviceObjects();
     }
-    return real_Present(dev, src, dst, wnd, dirty);
-}
-
-HRESULT STDMETHODCALLTYPE hook_Reset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp)
-{
-    HookEntry guard;
-    if (guard) {
-        Lock lk;
-        if (g.imgui_ok) { ImGui::SetCurrentContext(g.imgui); ImGui_ImplDX9_InvalidateDeviceObjects(); }
-        cap_release();
-        g.width = g.height = 0;
-    }
-    return real_Reset(dev, pp);
-}
-
-// ===============================================================
-// Vtable discovery
-// ===============================================================
-
-bool capture_vtable(void** out_present, void** out_reset)
-{
-    *out_present = *out_reset = nullptr;
-
-    IDirect3D9* d3d = Direct3DCreate9(D3D_SDK_VERSION);
-    if (!d3d) { hlog("d3d9: Direct3DCreate9 failed"); return false; }
-
-    WNDCLASSEXA wc = {};
-    wc.cbSize = sizeof(wc);
-    wc.lpfnWndProc = DefWindowProcA;
-    wc.hInstance = GetModuleHandleA(nullptr);
-    wc.lpszClassName = "at_overlay_d3d9_dummy";
-    if (!RegisterClassExA(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
-        d3d->Release();
-        return false;
-    }
-    HWND hwnd = CreateWindowExA(0, wc.lpszClassName, "at-overlay", WS_OVERLAPPEDWINDOW,
-                                0, 0, 2, 2, nullptr, nullptr, wc.hInstance, nullptr);
-    if (!hwnd) { d3d->Release(); return false; }
-
-    D3DPRESENT_PARAMETERS pp = {};
-    pp.Windowed         = TRUE;
-    pp.SwapEffect       = D3DSWAPEFFECT_DISCARD;
-    pp.BackBufferWidth  = 2;
-    pp.BackBufferHeight = 2;
-    pp.BackBufferCount  = 1;
-    pp.BackBufferFormat = D3DFMT_X8R8G8B8;
-    pp.hDeviceWindow    = hwnd;
-
-    struct { D3DDEVTYPE type; DWORD flags; } tries[] = {
-        { D3DDEVTYPE_HAL, D3DCREATE_HARDWARE_VERTEXPROCESSING },
-        { D3DDEVTYPE_HAL, D3DCREATE_SOFTWARE_VERTEXPROCESSING },
-        { D3DDEVTYPE_REF, D3DCREATE_SOFTWARE_VERTEXPROCESSING },
-    };
-
-    IDirect3DDevice9* dev = nullptr;
-    HRESULT hr = D3DERR_NOTAVAILABLE;
-    for (auto& t : tries) {
-        hr = d3d->CreateDevice(D3DADAPTER_DEFAULT, t.type, hwnd, t.flags, &pp, &dev);
-        if (SUCCEEDED(hr) && dev) break;
-    }
-
-    if (FAILED(hr) || !dev) {
-        hlog("d3d9: dummy CreateDevice failed: 0x%08lx", (unsigned long)hr);
-        DestroyWindow(hwnd);
-        d3d->Release();
-        return false;
-    }
-
-    void** vt = *(void***)dev;
-    *out_reset = vt[16]; /* IDirect3DDevice9::Reset */
-    *out_present = vt[17]; /* IDirect3DDevice9::Present */
-
-    dev->Release();
-    d3d->Release();
-    DestroyWindow(hwnd);
-    return true;
+    g.width = g.height = 0;
 }
 
 } // namespace
@@ -317,55 +182,15 @@ bool capture_vtable(void** out_present, void** out_reset)
 
 bool hook_d3d9_install()
 {
-    HMODULE d3d9 = GetModuleHandleA("d3d9.dll");
-    if (!d3d9) return false;
-
     if (!g_lock_ready) { InitializeCriticalSection(&g_lock); g_lock_ready = true; }
-
-    void *pPresent = nullptr, *pReset = nullptr;
-    if (!capture_vtable(&pPresent, &pReset)) return false;
-
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
-
-    bool any = false;
-    if (pPresent) {
-        real_Present = (PFN_Present)pPresent;
-        if (DetourAttach(&(PVOID&)real_Present, (PVOID)hook_Present) == NO_ERROR) {
-            any = true;
-        } else {
-            real_Present = nullptr;
-        }
-    }
-    if (pReset) {
-        real_Reset = (PFN_Reset)pReset;
-        if (DetourAttach(&(PVOID&)real_Reset, (PVOID)hook_Reset) != NO_ERROR) {
-            real_Reset = nullptr;
-        }
-    }
-
-    if (DetourTransactionCommit() != NO_ERROR) {
-        hlog("d3d9: DetourTransactionCommit failed");
-        real_Present = nullptr;
-        real_Reset = nullptr;
-        any = false;
-    }
-
-    if (any) hlog("d3d9: hooks created (Present=%p Reset=%p)", pPresent, pReset);
-    return any;
+    const bool installed = at_obs_d3d9_install();
+    hlog("d3d9: OBS hooks %s", installed ? "installed" : "failed");
+    return installed;
 }
 
 void hook_d3d9_uninstall()
 {
-    if (real_Present || real_Reset) {
-        DetourTransactionBegin();
-        DetourUpdateThread(GetCurrentThread());
-        if (real_Present) DetourDetach(&(PVOID&)real_Present, (PVOID)hook_Present);
-        if (real_Reset)   DetourDetach(&(PVOID&)real_Reset, (PVOID)hook_Reset);
-        DetourTransactionCommit();
-        real_Present = nullptr;
-        real_Reset = nullptr;
-    }
+    at_obs_d3d9_uninstall();
 
     if (!g_lock_ready) return;
     EnterCriticalSection(&g_lock);
@@ -377,3 +202,21 @@ void hook_d3d9_uninstall()
 }
 
 } // namespace at
+
+void at_obs_d3d9_present(IDirect3DDevice9* device)
+{
+    static volatile LONG logged_draw = 0;
+    if (InterlockedCompareExchange(&logged_draw, 1, 0) == 0) {
+        char line[192] = {};
+        _snprintf_s(line, sizeof(line), _TRUNCATE,
+                    "[at-overlay:%lu] d3d9-hook: AT draw callback reached (device=%p)\n",
+                    GetCurrentProcessId(), device);
+        at::log_write(line);
+    }
+    at::draw_obs_present(device);
+}
+
+void at_obs_d3d9_reset(IDirect3DDevice9* device)
+{
+    at::reset_obs_device(device);
+}

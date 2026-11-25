@@ -21,13 +21,23 @@
 #include "overlay_text.h"
 
 #include "imgui.h"
+#include <atomic>
 
-void at_overlay_draw_ui(const char *backend, int width, int height)
+namespace {
+std::atomic<const char *> g_capture_method{"Waiting"};
+}
+
+void at_overlay_set_capture_method(const char *capture_method)
 {
-    if (!at_session_is_active())
-        return;
+    g_capture_method.store(capture_method ? capture_method : "Waiting",
+                           std::memory_order_relaxed);
+}
 
-    at_text_draw();
+void at_overlay_draw_ui(const char *backend, int width, int height,
+                        const char *capture_method)
+{
+    if (at_session_is_active())
+        at_text_draw();
 
 #ifndef NDEBUG
     ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_Always);
@@ -42,6 +52,8 @@ void at_overlay_draw_ui(const char *backend, int width, int height)
     else
         ImGui::Text("at-overlay %dx%d", width, height);
     ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+    ImGui::Text("Capture: %s", capture_method ? capture_method :
+                 g_capture_method.load(std::memory_order_relaxed));
     ImGui::End();
 #endif
 }

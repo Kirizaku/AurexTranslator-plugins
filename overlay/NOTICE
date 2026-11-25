@@ -14,17 +14,26 @@ below, and the full license texts ship with binary releases.
   - obs-vkcapture — GPL-2.0-or-later
     https://github.com/nowrep/obs-vkcapture
     Copyright (C) 2021 David Rosca <nowrep@gmail.com>
-    Linux capture path: src/linux/vklayer.c/.h, src/linux/capture.c,
-    src/linux/backends/glinject.c/.h, src/linux/inject/dlsym.c/.h,
-    src/linux/inject/elfhacks.c/.h, src/common/utils.h,
-    ../include/host/overlay_protocol.h, src/windows/win_capture.cpp/.h, and
-    parts of cmake/overlay_linux.cmake.
+    Linux capture path: third_party/obs-vkcapture/vklayer.c and
+    third_party/obs-vkcapture/glinject.c, included through
+    src/linux/capture/vulkan/obs_vk_adapter.c and
+    src/linux/capture/gl/obs_gl_adapter.c. AT transport
+    adaptation: src/linux/capture/at_capture_bridge.c. Additional adapted or derived
+    files: src/linux/inject/dlsym.c/.h, src/linux/inject/elfhacks.c/.h,
+    src/common/utils.h, ../include/host/overlay_protocol.h, and
+    cmake/overlay_linux.cmake. The Windows transport in
+    src/windows/capture/win_capture.cpp/.h is derived from the upstream capture
+    transport; the original OBS-vkcapture Windows source files are not used.
 
   - obs-studio — GPL-2.0-or-later
     https://github.com/obsproject/obs-studio
     Original author: Lain Bailey (see the project's AUTHORS file)
-    Windows capture path: src/windows/backends/ follows the file and
-    function organisation of obs-studio/plugins/win-capture/graphics-hook.
+    Windows capture sources included through AT bridges:
+    third_party/obs-studio/graphics-hook/{d3d9-capture.cpp,d3d10-capture.cpp,
+    d3d11-capture.cpp,d3d12-capture.cpp,dxgi-capture.cpp,gl-capture.c,
+    vulkan-capture.c}. AT integration is in src/windows/capture/d3d/,
+    src/windows/capture/gl/, and src/windows/capture/vulkan/; the remaining
+    src/windows/backends/ files provide AT hooks, rendering, and IPC adaptation.
 
   - MangoHud — MIT License
     https://github.com/flightlessmango/MangoHud

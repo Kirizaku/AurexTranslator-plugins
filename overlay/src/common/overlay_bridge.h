@@ -45,6 +45,7 @@ struct at_bridge_info {
 };
 
 bool at_bridge_collect(const struct vk_data *data, VkSwapchainKHR sc, struct at_bridge_info *out);
+bool at_bridge_set_dispatch_key(VkDevice device, void *dispatchable);
 
 #ifdef __cplusplus
 }

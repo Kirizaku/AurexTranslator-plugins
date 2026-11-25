@@ -18,358 +18,225 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ******************************************************************************/
 
-/*
-OpenGL (WGL) overlay + capture on Windows
+#include <windows.h>
 
-Structure parallels obs-studio/plugins/win-capture/graphics-hook (gl-capture.c),
-rewritten for this project.
-*/
+#define COBJMACROS
+#include <dxgi.h>
+#include <d3d11.h>
+#include <cstring>
+#include <vector>
+
+#include <GL/gl.h>
 
 #include "win_common.h"
 #include "win_capture.h"
+#include "../capture/d3d/obs_capture_bridge.h"
+#include "../capture/gl/obs_gl_bridge.h"
+
+#include "imgui.h"
+#include "backends/imgui_impl_opengl3.h"
+
 #include "overlay_gl.h"
 #include "overlay_text.h"
 #include "overlay_ui.h"
 
-#include <windows.h>
-#include <GL/gl.h>
-#include <vector>
+#define GL_DRAW_FRAMEBUFFER_BINDING 0x8CA6
+#define GL_DRAW_FRAMEBUFFER 0x8CA9
+typedef void (APIENTRY *BindFramebufferProc)(GLenum, GLuint);
+static BindFramebufferProc glBindFramebuffer = nullptr;
 
-#include <detours/detours.h>
-#include "imgui.h"
-#include "backends/imgui_impl_opengl3.h"
-
-#ifndef GL_BGRA
-#define GL_BGRA 0x80E1
-#endif
-#ifndef GL_FRAMEBUFFER_BINDING
-#define GL_FRAMEBUFFER_BINDING 0x8CA6
-#endif
-#define AT_GL_FRAMEBUFFER 0x8D40
+void at_imgui_gl_abandon();
 
 namespace at {
 namespace {
 
-typedef BOOL (WINAPI* PFN_wglSwapBuffers)(HDC);
-typedef BOOL (WINAPI* PFN_SwapBuffers)(HDC);
-typedef BOOL (WINAPI* PFN_wglSwapLayerBuffers)(HDC, UINT);
-typedef void (WINAPI* PFN_glBindFramebuffer)(GLenum, GLuint);
-typedef HGLRC (WINAPI* PFN_wglGetCurrentContext)(void);
-typedef PROC  (WINAPI* PFN_wglGetProcAddress)(LPCSTR);
+static HGLRC overlay_context = nullptr;
+static ImGuiContext *overlay_imgui = nullptr;
+static bool overlay_imgui_ok = false;
+static bool overlay_functions_initialized = false;
+static thread_local bool internal_capture_present = false;
+static CRITICAL_SECTION gl_lock;
+static bool gl_lock_ready = false;
 
-PFN_wglSwapBuffers       real_wglSwapBuffers    = nullptr;
-PFN_SwapBuffers          real_SwapBuffers       = nullptr;
-PFN_wglSwapLayerBuffers  real_wglSwapLayerBuffers = nullptr;
-PFN_glBindFramebuffer    p_glBindFramebuffer    = nullptr;
-PFN_wglGetCurrentContext p_wglGetCurrentContext = nullptr;
-PFN_wglGetProcAddress    p_wglGetProcAddress    = nullptr;
-bool                     g_bind_fbo_resolved    = false;
-
-struct GLState {
-    HGLRC         ctx      = nullptr;
-    HGLRC         imgui_ctx = nullptr;
-    ImGuiContext* imgui    = nullptr;
-    bool          imgui_ok = false;
-    int           width    = 0;
-    int           height   = 0;
-
-    /* Capture: CPU readback into the shared frame mapping (capture_write_frame) */
-    int                  cap_w = 0;
-    int                  cap_h = 0;
-    std::vector<uint8_t> readbuf;
-    std::vector<uint8_t> flipbuf;
+class GlLock {
+public:
+    GlLock() { if (gl_lock_ready) EnterCriticalSection(&gl_lock); }
+    ~GlLock() { if (gl_lock_ready) LeaveCriticalSection(&gl_lock); }
 };
 
-GLState g;
-CRITICAL_SECTION g_lock;
-bool g_lock_ready = false;
-thread_local bool g_in_present = false;
-
-struct Lock {
-    Lock()  { if (g_lock_ready) EnterCriticalSection(&g_lock); }
-    ~Lock() { if (g_lock_ready) LeaveCriticalSection(&g_lock); }
-};
-
-// ===============================================================
-// Capture
-// ===============================================================
-
-void cap_release()
+static bool init_overlay_functions()
 {
-    g.cap_w = g.cap_h = 0;
-    capture_stop();
-}
+    const auto bind = wglGetProcAddress("glBindFramebuffer");
+    if (!bind || bind == reinterpret_cast<PROC>(1) || bind == reinterpret_cast<PROC>(2) ||
+        bind == reinterpret_cast<PROC>(3) || bind == reinterpret_cast<PROC>(-1)) return false;
 
-bool cap_init(int w, int h)
-{
-    g.cap_w = w; g.cap_h = h;
-    capture_frame_capture_started();
+    glBindFramebuffer = reinterpret_cast<BindFramebufferProc>(bind);
     return true;
 }
-
-bool cap_copy(int w, int h)
+static void shutdown_imgui()
 {
-    const size_t stride = (size_t)w * 4;
-    const size_t bytes  = stride * h;
-    g.readbuf.resize(bytes);
-    g.flipbuf.resize(bytes);
+	if (!overlay_imgui_ok)
+		return;
 
-    glReadBuffer(GL_BACK);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, g.readbuf.data());
-
-    for (int y = 0; y < h; ++y)
-        memcpy(g.flipbuf.data() + (size_t)y * stride, g.readbuf.data() + (size_t)(h - 1 - y) * stride, stride);
-
-    return capture_write_frame(w, h, g.flipbuf.data(), (int)stride);
+	ImGui::SetCurrentContext(overlay_imgui);
+	ImGui_ImplOpenGL3_Shutdown();
+	ImGui::DestroyContext(overlay_imgui);
+	overlay_imgui = nullptr;
+	overlay_imgui_ok = false;
+	overlay_context = nullptr;
 }
 
-// ===============================================================
-// Overlay
-// ===============================================================
-
-void shutdown_imgui()
+static bool ensure_imgui(HGLRC context)
 {
-    if (g.imgui_ok) {
-        ImGui::SetCurrentContext(g.imgui);
-        ImGui_ImplOpenGL3_Shutdown();
-        ImGui::DestroyContext(g.imgui);
-        g.imgui = nullptr;
-        g.imgui_ok = false;
-        g.imgui_ctx = nullptr;
-    }
+	if (overlay_imgui_ok && overlay_context == context)
+		return true;
+
+	shutdown_imgui();
+	overlay_context = context;
+	IMGUI_CHECKVERSION();
+	overlay_imgui = ImGui::CreateContext();
+	if (!overlay_imgui)
+		return false;
+
+	ImGui::SetCurrentContext(overlay_imgui);
+	ImGuiIO &io = ImGui::GetIO();
+	io.IniFilename = nullptr;
+	ImGui::StyleColorsDark();
+	ImGui::GetStyle().WindowRounding = 6.0f;
+	at_text_setup_font();
+	if (!ImGui_ImplOpenGL3_Init(nullptr)) {
+		hlog("gl: ImGui OpenGL3 backend init failed");
+		ImGui::DestroyContext(overlay_imgui);
+		overlay_imgui = nullptr;
+		overlay_context = nullptr;
+		return false;
+	}
+	overlay_imgui_ok = true;
+	return true;
 }
 
-bool ensure_imgui(HGLRC ctx)
+static void draw_overlay(HDC hdc)
 {
-    if (g.imgui_ok && g.imgui_ctx == ctx) return true;
-    if (g.imgui_ok) shutdown_imgui();
+	static int disabled = -1;
+	if (env_flag_cached("AT_OVERLAY_DISABLE_DRAW", &disabled))
+		return;
 
-    g.imgui_ctx = ctx;
-    IMGUI_CHECKVERSION();
-    g.imgui = ImGui::CreateContext();
-    ImGui::SetCurrentContext(g.imgui);
-    ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr;
-    ImGui::StyleColorsDark();
-    ImGui::GetStyle().WindowRounding = 6.0f;
-    at_text_setup_font();
+	HGLRC context = wglGetCurrentContext();
+	if (!context || !ensure_imgui(context))
+		return;
 
-    if (!ImGui_ImplOpenGL3_Init(nullptr)) {
-        hlog("gl: ImGui_ImplOpenGL3_Init failed");
-        ImGui::DestroyContext(g.imgui);
-        g.imgui = nullptr;
-        return false;
-    }
-    g.imgui_ok = true;
-    return true;
+	RECT rc = {};
+	HWND hwnd = WindowFromDC(hdc);
+	if (!hwnd || !GetClientRect(hwnd, &rc))
+		return;
+
+	const int width = rc.right - rc.left;
+	const int height = rc.bottom - rc.top;
+	if (width <= 0 || height <= 0)
+		return;
+
+	ImGui::SetCurrentContext(overlay_imgui);
+	if (at_text_font_dirty()) {
+		ImGui_ImplOpenGL3_DestroyDeviceObjects();
+		at_text_font_rebuilt();
+	}
+
+	ImGuiIO &io = ImGui::GetIO();
+	io.DisplaySize = ImVec2((float)width, (float)height);
+	io.DeltaTime = frame_delta();
+	GLint previous_fbo = 0;
+	glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previous_fbo);
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+	glViewport(0, 0, width, height);
+	ImGui_ImplOpenGL3_NewFrame();
+	ImGui::NewFrame();
+	at_overlay_draw_ui("OpenGL", width, height, at_obs_gl_uses_gpu() ? "GPU" : (capture_ready() ? "CPU" : "Waiting"));
+	ImGui::Render();
+	ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+	glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)previous_fbo);
 }
 
-void build_ui()
+static void on_present(HDC hdc)
 {
-    ImGuiIO& io = ImGui::GetIO();
-    at_overlay_draw_ui("OpenGL", (int)io.DisplaySize.x, (int)io.DisplaySize.y);
-}
+	if (vk_overlay_is_active())
+		return;
 
-void draw_overlay()
-{
-    static int no_draw = -1;
-    if (env_flag_cached("AT_OVERLAY_DISABLE_DRAW", &no_draw)) return;
-    if (!g.ctx || !ensure_imgui(g.ctx)) return;
+	if (!overlay_functions_initialized)
+		overlay_functions_initialized = init_overlay_functions();
 
-    ImGui::SetCurrentContext(g.imgui);
-    if (at_text_font_dirty()) {
-        ImGui_ImplOpenGL3_DestroyDeviceObjects();
-        at_text_font_rebuilt();
-    }
-    ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2((float)g.width, (float)g.height);
-    io.DeltaTime   = frame_delta();
+	if (!overlay_functions_initialized) return;
 
-    if (!g_bind_fbo_resolved && p_wglGetProcAddress) {
-        g_bind_fbo_resolved = true;
-        p_glBindFramebuffer = (PFN_glBindFramebuffer)p_wglGetProcAddress("glBindFramebuffer");
-    }
-
-    GLint prev_fbo = 0;
-    if (p_glBindFramebuffer) {
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-        p_glBindFramebuffer(AT_GL_FRAMEBUFFER, 0);
-    }
-    glViewport(0, 0, g.width, g.height);
-
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui::NewFrame();
-    build_ui();
-    ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-    if (p_glBindFramebuffer)
-        p_glBindFramebuffer(AT_GL_FRAMEBUFFER, (GLuint)prev_fbo);
-}
-
-// ===============================================================
-// Per-swap
-// ===============================================================
-
-void on_present(HDC hdc)
-{
-    if (vk_overlay_is_active()) return;
-
-    HGLRC ctx = p_wglGetCurrentContext ? p_wglGetCurrentContext() : nullptr;
-    if (!ctx) return;
-    g.ctx = ctx;
-
-    HWND hwnd = WindowFromDC(hdc);
-    RECT rc = {};
-    if (hwnd) GetClientRect(hwnd, &rc);
-    const int w = rc.right - rc.left;
-    const int h = rc.bottom - rc.top;
-    if (w <= 0 || h <= 0) return;
-    g.width = w; g.height = h;
-
-    capture_update();
-
-    if (capture_should_stop()) cap_release();
-    if (capture_ready() && (g.cap_w != w || g.cap_h != h)) cap_release();
-    if (capture_should_init()) {
-        if (!cap_init(w, h)) { cap_release(); capture_stop(); }
-    }
-    if (capture_ready() && capture_frame_requested()) {
-        if (cap_copy(w, h)) capture_frame_delivered();
-    }
-
-    draw_overlay();
-}
-
-BOOL WINAPI hook_wglSwapBuffers(HDC hdc)
-{
-    HookEntry guard;
-    if (guard && !g_in_present) {
-        g_in_present = true;
-        { Lock lk; on_present(hdc); }
-        g_in_present = false;
-    }
-    return real_wglSwapBuffers(hdc);
-}
-
-BOOL WINAPI hook_SwapBuffers(HDC hdc)
-{
-    HookEntry guard;
-    if (guard && !g_in_present) {
-        g_in_present = true;
-        { Lock lk; on_present(hdc); }
-        g_in_present = false;
-    }
-    return real_SwapBuffers(hdc);
-}
-
-BOOL WINAPI hook_wglSwapLayerBuffers(HDC hdc, UINT planes)
-{
-    HookEntry guard;
-    if (guard && !g_in_present) {
-        g_in_present = true;
-        { Lock lk; on_present(hdc); }
-        g_in_present = false;
-    }
-    return real_wglSwapLayerBuffers(hdc, planes);
+	draw_overlay(hdc);
 }
 
 } // namespace
 
-// ===============================================================
-// Public
-// ===============================================================
-
-bool hook_gl_install()
+extern "C" void at_obs_gl_capture_begin(void)
 {
-    HMODULE gl = GetModuleHandleA("opengl32.dll");
-    if (!gl) gl = LoadLibraryA("opengl32.dll");
-    if (!gl) return false;
-
-    if (!g_lock_ready) { InitializeCriticalSection(&g_lock); g_lock_ready = true; }
-
-    p_wglGetCurrentContext = (PFN_wglGetCurrentContext)GetProcAddress(gl, "wglGetCurrentContext");
-    p_wglGetProcAddress = (PFN_wglGetProcAddress)GetProcAddress(gl, "wglGetProcAddress");
-
-    DetourTransactionBegin();
-    DetourUpdateThread(GetCurrentThread());
-
-    bool any = false;
-
-    void* pWgl = (void*)GetProcAddress(gl, "wglSwapBuffers");
-    if (pWgl) {
-        real_wglSwapBuffers = (PFN_wglSwapBuffers)pWgl;
-        if (DetourAttach(&(PVOID&)real_wglSwapBuffers, (PVOID)hook_wglSwapBuffers) == NO_ERROR) {
-            any = true;
-        } else {
-            real_wglSwapBuffers = nullptr;
-        }
-    }
-
-    void* pWglLayer = (void*)GetProcAddress(gl, "wglSwapLayerBuffers");
-    if (pWglLayer) {
-        real_wglSwapLayerBuffers = (PFN_wglSwapLayerBuffers)pWglLayer;
-        if (DetourAttach(&(PVOID&)real_wglSwapLayerBuffers, (PVOID)hook_wglSwapLayerBuffers) == NO_ERROR) {
-            any = true;
-        } else {
-            real_wglSwapLayerBuffers = nullptr;
-        }
-    }
-
-    HMODULE gdi = GetModuleHandleA("gdi32.dll");
-    if (gdi) {
-        void* pSwap = (void*)GetProcAddress(gdi, "SwapBuffers");
-        if (pSwap) {
-            real_SwapBuffers = (PFN_SwapBuffers)pSwap;
-            if (DetourAttach(&(PVOID&)real_SwapBuffers, (PVOID)hook_SwapBuffers) == NO_ERROR) {
-                any = true;
-            } else {
-                real_SwapBuffers = nullptr;
-            }
-        }
-    }
-
-    if (DetourTransactionCommit() != NO_ERROR) {
-        hlog("gl: DetourTransactionCommit failed");
-        real_wglSwapBuffers = nullptr;
-        real_wglSwapLayerBuffers = nullptr;
-        real_SwapBuffers = nullptr;
-        any = false;
-    }
-
-    if (any) hlog("gl: swap hooks created (wgl=%p layer=%p)", pWgl, pWglLayer);
-    return any;
+	capture_update();
+	at_obs_gl_force_cpu(capture_force_cpu_requested());
+	at_obs_before_capture();
+	internal_capture_present = true;
 }
 
-void hook_gl_uninstall()
+extern "C" void at_obs_gl_capture_complete(void)
 {
-    if (real_wglSwapBuffers || real_wglSwapLayerBuffers || real_SwapBuffers) {
-        DetourTransactionBegin();
-        DetourUpdateThread(GetCurrentThread());
-        if (real_wglSwapBuffers)
-            DetourDetach(&(PVOID&)real_wglSwapBuffers, (PVOID)hook_wglSwapBuffers);
+	at_obs_after_capture(false, false);
+	internal_capture_present = false;
+}
 
-        if (real_wglSwapLayerBuffers)
-            DetourDetach(&(PVOID&)real_wglSwapLayerBuffers, (PVOID)hook_wglSwapLayerBuffers);
+extern "C" void at_obs_gl_render_overlay(HDC hdc)
+{
+	HookEntry hook_entry;
+	if (!hook_entry || vk_overlay_is_active()) return;
+	GlLock lock;
+	on_present(hdc);
+}
 
-        if (real_SwapBuffers)
-            DetourDetach(&(PVOID&)real_SwapBuffers, (PVOID)hook_SwapBuffers);
+extern "C" void at_obs_gl_context_destroyed(HGLRC context)
+{
+	HookEntry hook_entry;
+	if (!hook_entry || overlay_context != context || !overlay_imgui_ok) return;
+	GlLock lock;
+	HDC last_hdc = wglGetCurrentDC();
+	HGLRC last_context = wglGetCurrentContext();
+	HDC capture_dc = at_obs_gl_capture_dc();
+	const bool made_current = last_context == context || (capture_dc && wglMakeCurrent(capture_dc, context));
 
-        DetourTransactionCommit();
+	if (!made_current) {
+		ImGui::SetCurrentContext(overlay_imgui);
+		at_imgui_gl_abandon();
+		ImGui::DestroyContext(overlay_imgui);
+		overlay_imgui = nullptr;
+		overlay_imgui_ok = false;
+		overlay_context = nullptr;
+		at_obs_gl_abandon();
+		return;
+	}
+	shutdown_imgui();
+	at_obs_gl_release();
+	if (last_context != context) wglMakeCurrent(last_hdc, last_context);
+}
 
-        real_wglSwapBuffers = nullptr;
-        real_wglSwapLayerBuffers = nullptr;
-        real_SwapBuffers = nullptr;
-    }
+bool hook_gl_install(void)
+{
+	if (!gl_lock_ready) {
+		InitializeCriticalSection(&gl_lock);
+		gl_lock_ready = true;
+	}
+	return at_obs_gl_hook_install();
+}
 
-    if (!g_lock_ready) return;
-    EnterCriticalSection(&g_lock);
-    shutdown_imgui();
-    cap_release();
-    LeaveCriticalSection(&g_lock);
-    DeleteCriticalSection(&g_lock);
-    g_lock_ready = false;
+bool gl_capture_internal_present_active()
+{
+	return internal_capture_present;
+}
+
+void hook_gl_uninstall(void)
+{
+	// OBS owns these hooks and does not expose an uninstaller. The injector
+	// keeps the module loaded for the process lifetime, so leave its callbacks
+	// valid until process exit
 }
 
 } // namespace at

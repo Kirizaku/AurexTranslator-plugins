@@ -135,8 +135,9 @@ extern "C" void at_overlay_gl_draw(int width, int height, const struct at_gl_fb_
     ImDrawData* draw = ImGui::GetDrawData();
     if (!draw || draw->CmdListsCount == 0) return;
 
-    // A texture name of the overlay's that the game has taken over (see GetTextureSize in glinject.c):
-    // drawing with it shows the game's texture as glyphs, and the atlas updates fail with GL errors.
+    // A texture name of the overlay's that the game has taken over (see GetTextureSize
+    // in third_party/obs-vkcapture/glinject.c, included by obs_gl_adapter.c):
+    // drawing with it shows the game's texture as glyphs, and the atlas updates fail with GL errors
     // The overlay's texture is made again under a new name, and the game's is left alone
     if (fb && fb->GetTextureSize) {
         for (ImTextureData* tex : ImGui::GetPlatformIO().Textures) {

@@ -21,9 +21,7 @@
 /*
 D3D12 swapchain overlay backend (interface)
 
-Structure follows obs-studio/plugins/win-capture/graphics-hook
-(d3d12-capture.c), rewritten for this project and retargeted from DrawData
-capture to an in-place overlay
+The OBS capture implementation is connected through the AT bridge.
 */
 
 #pragma once
@@ -35,6 +33,7 @@ namespace at {
 bool d3d12_hook_queue();
 bool d3d12_try_present(IDXGISwapChain* swap);
 void d3d12_on_resize();
+void d3d12_on_swapchain_shutdown(IDXGISwapChain* swap);
 void d3d12_shutdown();
 
 } // namespace at

@@ -20,5 +20,14 @@
 #pragma once
 
 #ifdef __cplusplus
-void at_overlay_draw_ui(const char *backend, int width, int height);
+void at_overlay_draw_ui(const char *backend, int width, int height,
+                        const char *capture_method = nullptr);
 #endif /* __cplusplus */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+void at_overlay_set_capture_method(const char *capture_method);
+#ifdef __cplusplus
+}
+#endif
