@@ -89,11 +89,25 @@ static HRESULT STDMETHODCALLTYPE at_present_swap(IDirect3DSwapChain9 *swap, CONS
     return result;
 }
 
+static HRESULT STDMETHODCALLTYPE at_reset(IDirect3DDevice9 *device, D3DPRESENT_PARAMETERS *params)
+{
+    at_obs_d3d9_reset(device);
+    return hook_reset(device, params);
+}
+
+static HRESULT STDMETHODCALLTYPE at_reset_ex(IDirect3DDevice9 *device, D3DPRESENT_PARAMETERS *params, D3DDISPLAYMODEEX *mode)
+{
+    at_obs_d3d9_reset(device);
+    return hook_reset_ex(device, params, mode);
+}
+
 static LONG WINAPI at_d3d9_detour_attach(PVOID *target, PVOID detour)
 {
     if (detour == reinterpret_cast<PVOID>(hook_present)) detour = reinterpret_cast<PVOID>(at_present);
     else if (detour == reinterpret_cast<PVOID>(hook_present_ex)) detour = reinterpret_cast<PVOID>(at_present_ex);
     else if (detour == reinterpret_cast<PVOID>(hook_present_swap)) detour = reinterpret_cast<PVOID>(at_present_swap);
+    else if (detour == reinterpret_cast<PVOID>(hook_reset)) detour = reinterpret_cast<PVOID>(at_reset);
+    else if (detour == reinterpret_cast<PVOID>(hook_reset_ex)) detour = reinterpret_cast<PVOID>(at_reset_ex);
     return DetourAttach(target, detour);
 }
 
@@ -163,7 +177,6 @@ bool at_obs_d3d9_capture_should_stop()
 
 void at_obs_d3d9_capture_free()
 {
-    if (data.device) at_obs_d3d9_reset(data.device);
     capture_free();
 }
 
@@ -251,8 +264,8 @@ void at_obs_d3d9_uninstall()
     if (RealPresent) DetourDetach(reinterpret_cast<PVOID *>(&RealPresent), at_present);
     if (RealPresentEx) DetourDetach(reinterpret_cast<PVOID *>(&RealPresentEx), at_present_ex);
     if (RealPresentSwap) DetourDetach(reinterpret_cast<PVOID *>(&RealPresentSwap), at_present_swap);
-    if (RealReset) DetourDetach(reinterpret_cast<PVOID *>(&RealReset), hook_reset);
-    if (RealResetEx) DetourDetach(reinterpret_cast<PVOID *>(&RealResetEx), hook_reset_ex);
+    if (RealReset) DetourDetach(reinterpret_cast<PVOID *>(&RealReset), at_reset);
+    if (RealResetEx) DetourDetach(reinterpret_cast<PVOID *>(&RealResetEx), at_reset_ex);
     const LONG error = DetourTransactionCommit();
     if (error != NO_ERROR) {
         hlog("d3d9: OBS hook detach failed: %ld", error);
